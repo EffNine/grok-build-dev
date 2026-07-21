@@ -6,6 +6,22 @@ This fork removes all SpaceXAI/xAI service integration (OAuth login, telemetry, 
 
 ---
 
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/effnine/grok-build-dev/main/install.sh | bash
+```
+
+Pin a version:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/effnine/grok-build-dev/main/install.sh | bash -s 0.2.106
+```
+
+This downloads the matching GitHub Release binary into `~/.grok/bin` and puts it on your `PATH`. macOS (arm64/x86_64) and Linux (x86_64/arm64) are supported.
+
+> Requires a published [GitHub Release](https://github.com/effnine/grok-build-dev/releases) with `grok-{version}-{os}-{arch}` assets. Tag `vX.Y.Z` (or run the **Release** workflow) to publish one.
+
 ## Quick Start (BYOK)
 
 Export your provider key and base URL, then launch the TUI:
@@ -13,7 +29,7 @@ Export your provider key and base URL, then launch the TUI:
 ```sh
 export XAI_API_KEY="sk-..."
 export GROK_MODELS_BASE_URL="https://api.openai.com/v1"
-cargo run -p xai-grok-pager-bin
+grok
 ```
 
 Or launch the TUI first and configure it inline with the `/byok` slash command:
