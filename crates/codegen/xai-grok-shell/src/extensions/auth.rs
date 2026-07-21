@@ -253,6 +253,12 @@ async fn handle_logout(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
 
     let result = crate::auth::perform_logout(&agent.auth_manager, params.scope.as_deref())
         .map_err(|e| acp::Error::internal_error().data(format!("failed to logout: {e}")))?;
+    // Free/BYOK fork: always clear the stored API key on logout.
+    let grok_home = crate::util::grok_home::grok_home();
+    let _ = crate::auth::clear_api_key(&grok_home);
+    unsafe { std::env::remove_var("XAI_API_KEY") };
+    agent.sampling_config.borrow_mut().api_key = None;
+
     // `auth.lifecycle` (not `auth`) avoids colliding with the pre-existing
     // per-request `AuthManager::auth()` `#[instrument]` span.
     tracing::info_span!("auth.lifecycle", action = "logout", success = true).in_scope(|| {});
@@ -263,7 +269,7 @@ async fn handle_logout(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
         "ok": true,
         "was_logged_in": result.was_logged_in,
         "email": result.email,
-        "api_key_still_set": result.api_key_still_set,
+        "api_key_still_set": false,
     }))
 }
 
