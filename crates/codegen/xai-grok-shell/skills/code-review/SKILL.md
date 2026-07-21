@@ -1,7 +1,14 @@
 ---
 name: code-review
-description: Run an extremely strict maintainability review for abstraction quality, giant files, and spaghetti-condition growth. Use for a deep code quality audit or an especially harsh maintainability review.
+description: >
+  Review the current branch diff or a pull request for correctness bugs,
+  cleanups, and especially maintainability regressions (abstraction quality,
+  giant files, spaghetti-condition growth). Use when the user runs
+  /code-review, asks for a PR review, or wants a strict code quality audit.
 disable-model-invocation: true
+argument-hint: "[target or focus]"
+metadata:
+  short-description: "Strict diff / PR code review"
 ---
 
 # Strict Code Quality Review
@@ -9,6 +16,13 @@ disable-model-invocation: true
 Use this skill for an unusually strict review focused on implementation quality, maintainability, abstraction quality, and codebase health.
 
 Above all, this skill should push the reviewer to be **ambitious** about code structure. Do not merely identify local cleanup opportunities. Actively search for "code judo" moves: restructurings that preserve behavior while making the implementation dramatically simpler, smaller, more direct, and more elegant.
+
+## Scope
+
+1. Collect the change set first: `git status`, `git diff`, `git diff --cached`, and recent commits on the current branch versus its upstream/base when available. If the user named a PR, commit range, or path, scope the review to that target.
+2. Read the surrounding code for each meaningful hunk before commenting.
+3. Cover correctness bugs and risky edge cases, then apply the maintainability standards below. Correctness blockers outrank style nits.
+4. Prefer a short list of high-conviction findings over a flood of cosmetic notes.
 
 ## Core Prompt
 

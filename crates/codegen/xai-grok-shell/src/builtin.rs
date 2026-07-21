@@ -6,6 +6,8 @@ const HELP_SKILL_MD: &str = include_str!("../skills/help/SKILL.md");
 const CREATE_SKILL_MD: &str = include_str!("../skills/create-skill/SKILL.md");
 const CODE_REVIEW_SKILL_MD: &str = include_str!("../skills/code-review/SKILL.md");
 const IMAGINE_SKILL_MD: &str = include_str!("../skills/imagine/SKILL.md");
+const INIT_SKILL_MD: &str = include_str!("../skills/init/SKILL.md");
+const VERIFY_SKILL_MD: &str = include_str!("../skills/verify/SKILL.md");
 /// Compiled-in SKILL.md content for `/check-work` (available to headless mode).
 pub const CHECK_SKILL_MD: &str = include_str!("../skills/check-work/SKILL.md");
 /// Compiled-in SKILL.md content for headless `--best-of-n` (not extracted as
@@ -58,6 +60,8 @@ const BUNDLED_SKILLS: &[(&str, &str)] = &[
     ("code-review", CODE_REVIEW_SKILL_MD),
     ("imagine", IMAGINE_SKILL_MD),
     ("check-work", CHECK_SKILL_MD),
+    ("init", INIT_SKILL_MD),
+    ("verify", VERIFY_SKILL_MD),
 ];
 
 /// True when a discovered skill is the copy `extract_bundled_files` wrote to
@@ -210,7 +214,7 @@ mod tests {
             std::fs::write(home.join(filename), "old").unwrap();
         }
         std::fs::write(home.join("skills/help/SKILL.md"), "old").unwrap();
-        for name in ["check-work", "imagine", "code-review"] {
+        for name in ["check-work", "imagine", "code-review", "init", "verify"] {
             std::fs::write(home.join(format!("skills/{name}/SKILL.md")), "old").unwrap();
         }
         std::fs::write(home.join(".metadata_version"), "0.0.0-stale").unwrap();
@@ -238,7 +242,7 @@ mod tests {
             std::fs::read_to_string(home.join("skills/help/SKILL.md")).unwrap(),
             "old"
         );
-        for name in ["check-work", "imagine", "code-review"] {
+        for name in ["check-work", "imagine", "code-review", "init", "verify"] {
             assert_ne!(
                 std::fs::read_to_string(home.join(format!("skills/{name}/SKILL.md"))).unwrap(),
                 "old",
@@ -270,6 +274,32 @@ mod tests {
                 "{name} should not be a bundled skill"
             );
         }
+    }
+
+    #[test]
+    fn init_and_verify_skills_are_extracted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+
+        extract_bundled_files(home);
+
+        for name in ["init", "verify", "code-review", "check-work"] {
+            let path = home.join(format!("skills/{name}/SKILL.md"));
+            assert!(path.exists(), "expected bundled skill at {}", path.display());
+            let content = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                content.contains(&format!("name: {name}")),
+                "{name} skill frontmatter missing name"
+            );
+        }
+
+        let init = std::fs::read_to_string(home.join("skills/init/SKILL.md")).unwrap();
+        assert!(init.contains("AGENTS.md"));
+        assert!(init.contains("disable-model-invocation: true"));
+
+        let verify = std::fs::read_to_string(home.join("skills/verify/SKILL.md")).unwrap();
+        assert!(verify.contains("check-work"));
+        assert!(verify.contains("/verify"));
     }
 
     #[tokio::test]

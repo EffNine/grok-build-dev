@@ -4,7 +4,8 @@ description: >
   Check your work with a verification subagent that reviews diffs, runs builds
   and tests, and evaluates correctness. Read this file for instructions. Use when
   asked to "check work", "verify changes", "self-verify", "/check-work", "/check",
-  "/verify", or "/self-verify".
+  "/verify", or "/self-verify". `/verify` is also available as a dedicated
+  bundled skill alias with the same workflow.
 metadata:
   short-description: "Verify changes with a subagent"
 ---
