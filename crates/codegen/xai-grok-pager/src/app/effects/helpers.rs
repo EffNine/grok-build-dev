@@ -664,24 +664,23 @@ pub(super) async fn send_byok_configure(
             .expect("serialize byok/configure params")
             .into(),
     );
-    let raw: serde_json::Value = acp_send(req, tx).await?;
-    // ExtMethodResult envelope or raw success payload.
-    let data = raw
-        .get("data")
-        .cloned()
-        .unwrap_or(raw);
+    let resp = acp_send(req, tx).await?;
+    let envelope: ExtMethodResult<serde_json::Value> =
+        serde_json::from_str(resp.0.get())
+            .map_err(|e| anyhow::anyhow!("parse byok response: {e}"))?;
+    let data = envelope.result.ok_or_else(|| {
+        anyhow::anyhow!(
+            "{}",
+            envelope
+                .error
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "BYOK configure failed".into())
+        )
+    })?;
     let model_count = data
         .get("model_count")
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as usize;
-    if data.get("ok").and_then(|v| v.as_bool()) == Some(false) {
-        anyhow::bail!(
-            "{}",
-            data.get("error")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown error")
-        );
-    }
     Ok(model_count)
 }
 /// Best-effort `x.ai/auth/cancel`: stops the shell's device/loopback wait so a

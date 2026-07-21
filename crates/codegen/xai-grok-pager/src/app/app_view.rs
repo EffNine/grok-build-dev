@@ -550,6 +550,7 @@ fn parse_esc_ttl(raw: Option<String>) -> Duration {
 /// - `voice` — voice dictation entry point (the Ctrl+Space / F8 keybinding is
 ///   gated separately in [`crate::app::dispatch::voice`], since it bypasses the
 ///   slash registry)
+#[allow(dead_code)] // Free/BYOK fork never applies tier deny lists.
 pub(crate) const TIER_RESTRICTED_COMMANDS: &[&str] =
     &["usage", "imagine", "imagine-video", "voice"];
 /// Whether a subscription-tier display name is a tier with restricted

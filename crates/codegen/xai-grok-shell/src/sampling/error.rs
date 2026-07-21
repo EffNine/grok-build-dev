@@ -386,7 +386,7 @@ mod tests {
             format_rate_limited_user_message(None, true),
             RATE_LIMITED_USER_MESSAGE_API_KEY
         );
-        assert!(RATE_LIMITED_USER_MESSAGE_OAUTH.contains("Upgrade your account"));
+        assert!(RATE_LIMITED_USER_MESSAGE_OAUTH.contains("rate limit"));
         assert!(RATE_LIMITED_USER_MESSAGE_API_KEY.contains("team"));
         assert!(RATE_LIMITED_USER_MESSAGE_API_KEY.contains("credits"));
         assert!(
