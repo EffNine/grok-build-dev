@@ -482,12 +482,15 @@ mod tests {
         ));
     }
     #[test]
-    fn usage_manage_returns_open_url() {
+    fn usage_manage_returns_byok_error() {
         match run_usage("manage") {
-            CommandResult::Action(Action::OpenUrl(url)) => {
-                assert_eq!(url, "https://grok.com/?_s=usage");
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("Billing management is not available"),
+                    "got: {msg}"
+                );
             }
-            other => panic!("expected Action(OpenUrl), got {other:?}"),
+            other => panic!("expected Error, got {other:?}"),
         }
     }
     #[test]
@@ -514,16 +517,19 @@ mod tests {
         ));
     }
     #[test]
-    fn usage_manage_with_leading_whitespace() {
+    fn usage_manage_with_leading_whitespace_returns_byok_error() {
         match run_usage("  manage  ") {
-            CommandResult::Action(Action::OpenUrl(url)) => {
-                assert_eq!(url, "https://grok.com/?_s=usage");
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("Billing management is not available"),
+                    "got: {msg}"
+                );
             }
-            other => panic!("expected Action(OpenUrl), got {other:?}"),
+            other => panic!("expected Error, got {other:?}"),
         }
     }
     #[test]
-    fn usage_suggest_args_returns_show_and_manage() {
+    fn usage_suggest_args_returns_show_only() {
         let models = ModelState::default();
         let ctx = crate::slash::command::AppCtx {
             models: &models,
@@ -534,18 +540,16 @@ mod tests {
         let items = usage::UsageCommand
             .suggest_args(&ctx, "")
             .expect("should have suggestions");
-        assert_eq!(items.len(), 2);
+        assert_eq!(items.len(), 1);
         assert_eq!(items[0].display, "show");
         assert_eq!(items[0].insert_text, "show");
-        assert_eq!(items[1].display, "manage");
-        assert_eq!(items[1].insert_text, "manage");
     }
     #[test]
     fn usage_metadata() {
         let cmd = usage::UsageCommand;
         assert_eq!(cmd.name(), "usage");
         assert!(cmd.takes_args());
-        assert_eq!(cmd.arg_placeholder(), Some("show | manage"));
+        assert_eq!(cmd.arg_placeholder(), Some("show"));
         assert!(!cmd.description().is_empty());
         assert!(!cmd.usage().is_empty());
     }
