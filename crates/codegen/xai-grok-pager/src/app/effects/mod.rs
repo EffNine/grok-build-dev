@@ -83,6 +83,29 @@ pub(crate) fn execute(
                     TaskResult::LogoutComplete
                 });
         }
+        Effect::ConfigureByok {
+            key,
+            base_url,
+            models_list_url,
+        } => {
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                match send_byok_configure(&tx, &key, &base_url, models_list_url.as_deref()).await {
+                    Ok(model_count) => TaskResult::ByokConfigureComplete {
+                        ok: true,
+                        message: format!(
+                            "BYOK configured. Fetched {model_count} model(s) from {base_url}."
+                        ),
+                        model_count: Some(model_count),
+                    },
+                    Err(e) => TaskResult::ByokConfigureComplete {
+                        ok: false,
+                        message: format!("BYOK setup failed: {e}"),
+                        model_count: None,
+                    },
+                }
+            });
+        }
         Effect::CancelAuth { request_seq } => {
             let tx = acp_tx.clone();
             tasks.spawn(async move { send_auth_cancel(&tx, request_seq).await });

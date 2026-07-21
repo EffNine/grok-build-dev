@@ -1942,14 +1942,11 @@ impl MvpAgent {
         let (show_resolved_model, gate, subscription_tier) = {
             let cfg = self.cfg.borrow();
             let rs = cfg.remote_settings.as_ref();
-            let gate = rs
+            // Free/BYOK fork: never emit a subscription gate.
+            let gate = None::<crate::auth::GateInfo>;
+            let _ignored_remote_gate = rs
                 .and_then(|s| s.gate_message.as_ref())
-                .filter(|m| !m.is_empty())
-                .map(|message| crate::auth::GateInfo {
-                    message: message.clone(),
-                    url: rs.and_then(|s| s.gate_url.clone()),
-                    label: rs.and_then(|s| s.gate_label.clone()),
-                });
+                .filter(|m| !m.is_empty());
             let subscription_tier = rs.and_then(|s| s.subscription_tier_display.clone());
             (rs.and_then(|s| s.show_resolved_model), gate, subscription_tier)
         };
@@ -1961,18 +1958,8 @@ impl MvpAgent {
             .auth_manager
             .current()
             .map(|auth| {
-                let gate = if !self.tier_allowed.get() && gate.is_none() {
-                    let message = "A subscription is required.".to_string();
-                    Some(crate::auth::GateInfo {
-                        message,
-                        url: Some(
-                            "https://grok.com/supergrok?referrer=grok-build".to_string(),
-                        ),
-                        label: Some("Subscribe".to_string()),
-                    })
-                } else {
-                    gate
-                };
+                // Free/BYOK fork: never synthesize a SuperGrok subscription gate.
+                let gate = None;
                 let auth_meta = crate::auth::AuthMeta {
                     email: auth.email.clone(),
                     auth_mode: Some(format!("{:?}", auth.auth_mode)),

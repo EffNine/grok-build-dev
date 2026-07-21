@@ -1540,14 +1540,14 @@ fn resolve_prefetch_env_from_parts(
         return None;
     }
 
-    let model_fetch_auth = ModelFetchAuth::resolve(&endpoints, auth.is_some());
-
-    if auth.is_none()
-        && !endpoints.has_custom_endpoint()
-        && model_fetch_auth == ModelFetchAuth::Session
-    {
+    // Free/BYOK fork: only fetch a model catalog when the user configured a
+    // custom `models_base_url` / list URL. Never hit first-party `/v1/models`.
+    if !endpoints.has_custom_endpoint() {
+        tracing::info!("startup model prefetch skipped: no models_base_url (BYOK fork)");
         return None;
     }
+
+    let model_fetch_auth = ModelFetchAuth::resolve(&endpoints, auth.is_some());
 
     Some(PrefetchEnv {
         auth,

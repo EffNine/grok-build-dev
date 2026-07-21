@@ -15,9 +15,26 @@ use crate::scrollback::blocks::SessionEvent;
 // Auth dispatch
 // ---------------------------------------------------------------------------
 
-/// `/logout` -- ask the shell to clear auth, then return to the login screen.
+/// `/logout` -- clear API key credentials (free/BYOK fork; no OAuth session).
 pub(super) fn dispatch_logout(_app: &mut AppView) -> Vec<Effect> {
     vec![Effect::Logout]
+}
+
+/// Free/BYOK fork: `/login` and welcome Login map to BYOK setup messaging.
+pub(super) fn dispatch_login(app: &mut AppView) -> Vec<Effect> {
+    app.auth_state = AuthState::Pending {
+        error: Some(
+            "OAuth login is disabled. Run /byok <api_key> <base_url> \
+             (or set XAI_API_KEY and GROK_MODELS_BASE_URL)."
+                .to_string(),
+        ),
+    };
+    if !matches!(app.active_view, ActiveView::Welcome) {
+        app.auth_return_view = Some(app.active_view);
+        show_welcome(app);
+    }
+    app.welcome_prompt_focused = false;
+    vec![]
 }
 
 /// Ensure `login_method_id` is populated from stored auth methods.
@@ -199,55 +216,6 @@ pub(super) fn strip_trailing_auth_error_blocks(agent: &mut AgentView) {
     }
 }
 
-/// Start an interactive login flow. Triggered by pressing 'l' on the
-/// welcome screen or by the `/login` slash command.
-///
-/// When invoked mid-session (the active view is an agent/dashboard rather
-/// than the welcome screen), the auth UI — including the external auth
-/// provider's sign-in URL and status — is only rendered by the welcome
-/// view. We therefore stash the caller's view in `auth_return_view` and
-/// switch to `Welcome` so the flow is actually visible; the prior view is
-/// restored once auth completes or is cancelled. Without this, `/login`
-/// with an external auth provider configured appeared to do nothing.
-pub(super) fn dispatch_login(app: &mut AppView) -> Vec<Effect> {
-    ensure_login_method(app);
-    let Some(method_id) = app.login_method_id.clone() else {
-        app.auth_state = AuthState::Pending {
-            error: Some(no_login_method_error(app)),
-        };
-        return vec![];
-    };
-
-    // Surface the auth UI when triggered from inside a session. `show_welcome`
-    // resets ephemeral state here, covering the AuthComplete / cancel-login
-    // fallbacks too (`auth_return_view` is only ever set here).
-    if !matches!(app.active_view, ActiveView::Welcome) {
-        app.auth_return_view = Some(app.active_view);
-        show_welcome(app);
-    }
-
-    abort_prior_auth(app);
-
-    let request_seq = app.next_auth_request_seq;
-    app.next_auth_request_seq += 1;
-    app.auth_code_input.reset();
-    app.auth_state = AuthState::Authenticating {
-        request_seq,
-        handle: None,
-        auth_url: None,
-        mode: app.auth_start_mode,
-    };
-
-    vec![
-        Effect::Authenticate {
-            request_seq,
-            method_id,
-            use_oauth: app.auth_use_oauth,
-            force_interactive: true,
-        },
-        Effect::PollAuthUrl { request_seq },
-    ]
-}
 
 /// Cancel a login that was started from inside a session and restore the
 /// caller's view. Only meaningful when `auth_return_view` is set (a
