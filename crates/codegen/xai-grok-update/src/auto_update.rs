@@ -28,18 +28,19 @@ const MSG_AUTO_UPDATE_BACKGROUND: &str = "Auto-update running in background.";
 const MSG_RUN_UPDATE_MANUAL: &str = "Run `grok update` to get the latest version.";
 /// Manual-install one-liner for this platform's bootstrap installer.
 fn manual_install_cmd() -> &'static str {
-    if cfg!(windows) {
-        "irm https://x.ai/cli/install.ps1 | iex"
-    } else {
-        "curl -fsSL https://x.ai/cli/install.sh | bash"
-    }
+    // BYOK fork: GitHub-hosted install.sh (not x.ai CDN).
+    "curl -fsSL https://raw.githubusercontent.com/effnine/grok-build-dev/main/install.sh | bash"
 }
 
 /// Build a reinstall hint for a known installer type.
 fn reinstall_hint(installer: &str) -> String {
     match installer {
         "npm" => "Please reinstall via npm:\n  npm i -g @xai-official/grok".to_string(),
-        "gh-release" => "Please reinstall via GitHub Releases:\n  gh release download --repo xai-org-shared/grok-build --pattern 'grok-*' --output grok && chmod +x grok".to_string(),
+        "gh-release" => format!(
+            "Please reinstall via:\n  {}\nOr from GitHub Releases:\n  gh release download --repo {} --pattern 'grok-*' --output grok && chmod +x grok",
+            manual_install_cmd(),
+            crate::version::GH_RELEASE_REPO,
+        ),
         _ => format!("Please reinstall via:\n  {}", manual_install_cmd()),
     }
 }
@@ -2001,11 +2002,10 @@ async fn gh_release_download(tag: &str, pattern: &str, dest: &std::path::Path) -
     Ok(())
 }
 
-/// Download and install grok from GitHub Releases (xai-org-shared/grok-build).
+/// Download and install grok from GitHub Releases (`GH_RELEASE_REPO`).
 ///
 /// Uses `gh release download` to fetch the binary matching the current platform.
-/// This works anywhere the `gh` CLI is authenticated, without needing npm or
-/// internal network access.
+/// This works anywhere the `gh` CLI is authenticated (public repos need no auth).
 async fn install_gh_release(target: Option<&str>) -> Result<()> {
     let (os, arch) = detect_platform()?;
     let platform = format!("{}-{}", os, arch);
@@ -3461,27 +3461,27 @@ mod tests {
             "should suggest gh release download: {hint}"
         );
         assert!(
-            hint.contains("xai-org-shared/grok-build"),
+            hint.contains(crate::version::GH_RELEASE_REPO),
             "should name the repo: {hint}"
+        );
+        assert!(
+            hint.contains("install.sh"),
+            "should also mention curl install.sh: {hint}"
         );
     }
 
     #[test]
     fn test_reinstall_hint_internal_mentions_platform_installer() {
         let hint = reinstall_hint("internal");
-        if cfg!(windows) {
-            assert!(hint.contains("irm"), "should suggest irm install: {hint}");
-            assert!(
-                hint.contains("install.ps1"),
-                "should reference install.ps1: {hint}"
-            );
-        } else {
-            assert!(hint.contains("curl"), "should suggest curl install: {hint}");
-            assert!(
-                hint.contains("install.sh"),
-                "should reference install.sh: {hint}"
-            );
-        }
+        assert!(hint.contains("curl"), "should suggest curl install: {hint}");
+        assert!(
+            hint.contains("install.sh"),
+            "should reference install.sh: {hint}"
+        );
+        assert!(
+            hint.contains("effnine/grok-build-dev"),
+            "should point at this fork: {hint}"
+        );
     }
 
     #[test]
