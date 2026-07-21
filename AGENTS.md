@@ -13,4 +13,4 @@ This repo is the Rust source for **Grok Build (`grok`)** — a terminal-based AI
 
 ### Running the agent (authentication required)
 - The core product (the agent responding to a prompt / editing files) requires xAI auth against remote endpoints (`api.x.ai`). Provide either an `XAI_API_KEY` env var, or complete an interactive login (`grok login`, or the on-launch OAuth device-code flow shown in the TUI).
-- Without credentials, the TUI still launches and renders the OAuth login screen, and headless mode (`grok -p "..."`) exits with a clear "Not signed in" error. All unit/integration tests mock these endpoints, so `cargo test`/`cargo build` need no live services or credentials.
+- Without credentials, the TUI still launches and renders its full main menu (the status line defaults to the `xai.api_key` auth method), but the first submitted prompt fails inline with `Authentication required … Run /login`; headless mode (`grok -p "..."`) exits non-zero with an `Unauthorized (401) from https://cli-chat-proxy.grok.com/...` error. All unit/integration tests mock these endpoints, so `cargo test`/`cargo build` need no live services or credentials.
