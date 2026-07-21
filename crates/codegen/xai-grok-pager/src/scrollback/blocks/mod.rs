@@ -27,11 +27,11 @@ pub use subagent::{SubagentBlock, SubagentBlockKind};
 pub use system::SystemMessageBlock;
 pub use thinking::ThinkingBlock;
 pub use tool::{
-    DiffLineOutput, DiffRenderConfig, DiscoveredTool, EditToolCallBlock, ExecuteToolCallBlock,
-    IntegrationSearchToolCallBlock, LineRange, ListDirToolCallBlock, OtherToolCallBlock,
-    ReadToolCallBlock, SearchFileMatch, SearchLineMatch, SearchToolCallBlock, ToolCallBlock,
-    UseToolCallBlock, discovered_tool_action, render_diff_hunk_highlighted,
-    render_diff_hunks_highlighted,
+    DiffLayout, DiffLineOutput, DiffRenderConfig, DiscoveredTool, EditToolCallBlock,
+    ExecuteToolCallBlock, IntegrationSearchToolCallBlock, LineRange, ListDirToolCallBlock,
+    OtherToolCallBlock, ReadToolCallBlock, SIDE_BY_SIDE_MIN_WIDTH, SearchFileMatch, SearchLineMatch,
+    SearchToolCallBlock, ToolCallBlock, UseToolCallBlock, align_side_by_side,
+    discovered_tool_action, render_diff_hunk_highlighted, render_diff_hunks_highlighted,
 };
 pub use user::UserPromptBlock;
 

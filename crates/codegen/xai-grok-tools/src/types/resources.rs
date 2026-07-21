@@ -179,7 +179,40 @@ pub struct Resources {
     entries: Vec<ResourceEntry>,
 }
 pub type SharedResources = Arc<Mutex<Resources>>;
+
+/// Callback handle for registering a deferred MCP tool on demand.
+///
+/// Shell-side sessions install the concrete implementation; tools like
+/// `search_tool` and `use_tool` call it to promote a tool that was kept out of
+/// the model's tool list at init time into the active set.
+pub struct DeferredToolCallback(
+    pub Arc<
+        dyn Fn(&str) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>
+            + Send
+            + Sync,
+    >,
+);
+
+impl Clone for DeferredToolCallback {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl DeferredToolCallback {
+    pub fn new<F>(f: F) -> Self
+    where
+        F: Fn(&str) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        Self(Arc::new(f))
+    }
+}
+
 impl Default for Resources {
+
     fn default() -> Self {
         Self::new()
     }
@@ -644,6 +677,29 @@ pub struct RespectGitignore(pub bool);
 impl Default for RespectGitignore {
     fn default() -> Self {
         Self(true)
+    }
+}
+
+/// Glob-based path exclusion shared by Read / Grep / ListDir / Edit / Bash.
+///
+/// Seeded by `agent_rebuild` from `[tools] blocked_paths` /
+/// `GROK_BLOCKED_PATHS` (defaults to common build/cache directories).
+pub type BlockedPaths = crate::util::PathBlocker;
+
+/// Return a blocked-path error message when `path` matches the session
+/// [`BlockedPaths`] resource. `None` when no blocker is installed or the
+/// path is allowed.
+pub fn blocked_path_error(
+    resources: &Resources,
+    path: &std::path::Path,
+    cwd: &std::path::Path,
+    display_path: &std::path::Path,
+) -> Option<String> {
+    let blocker = resources.get::<BlockedPaths>()?;
+    if blocker.is_blocked(path, Some(cwd)) {
+        Some(blocker.blocked_message(display_path))
+    } else {
+        None
     }
 }
 /// Whether to enrich path-not-found errors with CWD reminders, "dropped repo

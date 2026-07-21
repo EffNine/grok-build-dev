@@ -164,7 +164,9 @@ pub async fn hybrid_search(
             fts_results.push(r);
         }
     }
-    let vec_available = index.vec_available();
+    // Embeddings are optional in this fork. If no provider is available,
+    // fall back to FTS-only search without requiring sqlite-vec.
+    let vec_available = index.vec_available() && embedding_provider.is_some();
 
     // Phase 2 (async): embed query — no &index borrow here
     let query_embedding = if vec_available {

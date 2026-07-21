@@ -34,7 +34,7 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::Style as SyntectStyle;
 
 use super::TOOL_HEADER_RANGE;
-use crate::diff::{DiffHunk, diff_hunks_to_patch};
+use crate::diff::{DiffHunk, DiffLine, diff_hunks_to_patch};
 use crate::scrollback::block::BlockContent;
 use crate::scrollback::types::{
     AccentStyle, BlockBackground, BlockContext, BlockLine, BlockOutput, DisplayMode,
@@ -76,6 +76,44 @@ pub enum EditHighlightPhase {
     },
 }
 
+/// Diff layout mode for Edit tool blocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiffLayout {
+    /// Classic unified diff (default).
+    #[default]
+    Unified,
+    /// Old on the left, new on the right, with a vertical separator.
+    SideBySide,
+}
+
+impl DiffLayout {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "unified" | "u" => Some(Self::Unified),
+            "side-by-side" | "side_by_side" | "sbs" | "split" => Some(Self::SideBySide),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unified => "unified",
+            Self::SideBySide => "side_by_side",
+        }
+    }
+
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Unified => Self::SideBySide,
+            Self::SideBySide => Self::Unified,
+        }
+    }
+}
+
+/// Minimum terminal width (columns) required for side-by-side rendering.
+/// Narrower terminals fall back to unified.
+pub const SIDE_BY_SIDE_MIN_WIDTH: u16 = 120;
+
 /// Configuration for diff rendering (tweakable for dev testing).
 #[derive(Debug, Clone)]
 pub struct DiffRenderConfig {
@@ -93,6 +131,9 @@ pub struct DiffRenderConfig {
     /// Show two line-number columns (old + new) like GitHub's unified diff.
     /// When false (default), show a single column with the new-file line number.
     pub dual_line_numbers: bool,
+    /// Unified vs side-by-side layout. Side-by-side falls back to unified when
+    /// the available width is below [`SIDE_BY_SIDE_MIN_WIDTH`].
+    pub layout: DiffLayout,
 }
 
 impl Default for DiffRenderConfig {
@@ -103,6 +144,7 @@ impl Default for DiffRenderConfig {
             indent_bg: false,
             hunk_separator: "…".to_string(),
             dual_line_numbers: false,
+            layout: DiffLayout::Unified,
         }
     }
 }
@@ -167,6 +209,21 @@ pub fn render_diff_hunks_highlighted(
 /// highlighter state exactly as in the hunk-only phase); when `by_new_line`
 /// is given, matching Equal/Insert lines swap in the full-file styles.
 fn render_diff_hunks_core(
+    hunks: &[DiffHunk],
+    path: &Path,
+    by_new_line: Option<&HashMap<usize, EditLineStyles>>,
+    theme: &Theme,
+    width: u16,
+    config: &DiffRenderConfig,
+) -> Vec<DiffLineOutput> {
+    if config.layout == DiffLayout::SideBySide && width >= SIDE_BY_SIDE_MIN_WIDTH {
+        return render_diff_hunks_side_by_side(hunks, path, by_new_line, theme, width, config);
+    }
+    render_diff_hunks_unified(hunks, path, by_new_line, theme, width, config)
+}
+
+/// Classic unified-diff walk (single column of +/-/= lines).
+fn render_diff_hunks_unified(
     hunks: &[DiffHunk],
     path: &Path,
     by_new_line: Option<&HashMap<usize, EditLineStyles>>,
@@ -247,6 +304,221 @@ fn render_diff_hunks_core(
         }
     }
 
+    lines
+}
+
+/// Pair old/new lines within a hunk for side-by-side display.
+///
+/// Equal lines appear on both sides. Runs of Delete followed by Insert are
+/// zipped (padding the shorter side). Lone Insert/Delete runs pad the other
+/// side with blank cells.
+pub fn align_side_by_side(hunk: &[DiffLine]) -> Vec<(Option<&DiffLine>, Option<&DiffLine>)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < hunk.len() {
+        match hunk[i].tag {
+            ChangeTag::Equal => {
+                out.push((Some(&hunk[i]), Some(&hunk[i])));
+                i += 1;
+            }
+            ChangeTag::Delete => {
+                let start = i;
+                while i < hunk.len() && hunk[i].tag == ChangeTag::Delete {
+                    i += 1;
+                }
+                let deletes = &hunk[start..i];
+                let ins_start = i;
+                while i < hunk.len() && hunk[i].tag == ChangeTag::Insert {
+                    i += 1;
+                }
+                let inserts = &hunk[ins_start..i];
+                let n = deletes.len().max(inserts.len());
+                for k in 0..n {
+                    out.push((deletes.get(k), inserts.get(k)));
+                }
+            }
+            ChangeTag::Insert => {
+                let start = i;
+                while i < hunk.len() && hunk[i].tag == ChangeTag::Insert {
+                    i += 1;
+                }
+                for line in &hunk[start..i] {
+                    out.push((None, Some(line)));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn truncate_visible(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut cols = 0usize;
+    for ch in text.chars() {
+        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if cols + w > width {
+            break;
+        }
+        out.push(ch);
+        cols += w;
+    }
+    out
+}
+
+fn pad_to_width(text: &str, width: usize) -> String {
+    let cols = unicode_width::UnicodeWidthStr::width(text);
+    if cols >= width {
+        text.to_string()
+    } else {
+        format!("{text}{}", " ".repeat(width - cols))
+    }
+}
+
+/// Side-by-side rendering: old | new with a vertical separator.
+fn render_diff_hunks_side_by_side(
+    hunks: &[DiffHunk],
+    path: &Path,
+    by_new_line: Option<&HashMap<usize, EditLineStyles>>,
+    theme: &Theme,
+    width: u16,
+    config: &DiffRenderConfig,
+) -> Vec<DiffLineOutput> {
+    let syntect = get_syntect();
+    let mut lines = Vec::new();
+    let indent = if config.indent { INDENT } else { "" };
+    let indent_width = indent.len();
+    let sep = " │ ";
+    let sep_width = unicode_width::UnicodeWidthStr::width(sep);
+    // Reserve room for: indent + old_num + gap + content + sep + new_num + gap + content
+    let num_width = 4usize;
+    let gutter_each = num_width + GUTTER_GAP.len();
+    let usable = (width as usize)
+        .saturating_sub(indent_width)
+        .saturating_sub(sep_width)
+        .saturating_sub(gutter_each * 2);
+    let half = usable / 2;
+    if half < 8 {
+        // Degenerate: fall back to unified even if width met the soft min.
+        return render_diff_hunks_unified(hunks, path, by_new_line, theme, width, config);
+    }
+
+    for (i, hunk) in hunks.iter().enumerate() {
+        if i > 0 && !lines.is_empty() && !config.hunk_separator.is_empty() {
+            let sep_text = match hunk_gap_lines(&hunks[i - 1], hunk) {
+                Some(1) => format!("{} 1 unchanged line", config.hunk_separator),
+                Some(n) => format!("{} {n} unchanged lines", config.hunk_separator),
+                None => config.hunk_separator.clone(),
+            };
+            lines.push(DiffLineOutput {
+                line: Line::from(vec![
+                    Span::raw(indent),
+                    Span::styled(sep_text, theme.muted()),
+                ]),
+                background: None,
+                content_start_col: 0,
+                gutter_span_count: 0,
+                content_text: String::new(),
+                joiner: None,
+                is_separator: true,
+            });
+        }
+        if hunk.is_empty() {
+            continue;
+        }
+        let mut old_highlighter = syntect.highlight_lines_by_file_path(path);
+        let mut new_highlighter = syntect.highlight_lines_by_file_path(path);
+        for (left, right) in align_side_by_side(hunk) {
+            let left_text = left
+                .map(|l| expand_tabs(l.text.trim_end_matches(['\r', '\n'])).into_owned())
+                .unwrap_or_default();
+            let right_text = right
+                .map(|l| expand_tabs(l.text.trim_end_matches(['\r', '\n'])).into_owned())
+                .unwrap_or_default();
+
+            let left_tag = left.map(|l| l.tag).unwrap_or(ChangeTag::Equal);
+            let right_tag = right.map(|l| l.tag).unwrap_or(ChangeTag::Equal);
+
+            let left_spans = if left.is_some() {
+                render_content_spans(
+                    &left_text,
+                    left_tag,
+                    theme,
+                    &mut old_highlighter,
+                    syntect,
+                )
+            } else {
+                vec![Span::raw(" ".repeat(half.min(1)))]
+            };
+            let mut right_spans = if right.is_some() {
+                render_content_spans(
+                    &right_text,
+                    right_tag,
+                    theme,
+                    &mut new_highlighter,
+                    syntect,
+                )
+            } else {
+                vec![Span::raw(" ".repeat(half.min(1)))]
+            };
+            if let (Some(map), Some(line)) = (by_new_line, right)
+                && let Some(spans) = map_spans_for_line(line, &right_text, map, theme)
+            {
+                right_spans = spans;
+            }
+            let _ = (left_spans, right_spans);
+
+            let left_disp = pad_to_width(&truncate_visible(&left_text, half), half);
+            let right_disp = pad_to_width(&truncate_visible(&right_text, half), half);
+
+            let left_style = match left_tag {
+                ChangeTag::Delete => Style::default().fg(theme.diff_delete_fg),
+                ChangeTag::Insert => Style::default().fg(theme.diff_insert_fg),
+                ChangeTag::Equal => Style::default(),
+            };
+            let right_style = match right_tag {
+                ChangeTag::Delete => Style::default().fg(theme.diff_delete_fg),
+                ChangeTag::Insert => Style::default().fg(theme.diff_insert_fg),
+                ChangeTag::Equal => Style::default(),
+            };
+
+            let old_num = left
+                .map(|l| format!("{:>width$}", l.lo.max(1), width = num_width))
+                .unwrap_or_else(|| " ".repeat(num_width));
+            let new_num = right
+                .map(|l| format!("{:>width$}", l.ln.max(1), width = num_width))
+                .unwrap_or_else(|| " ".repeat(num_width));
+
+            let bg = match (left_tag, right_tag) {
+                (ChangeTag::Delete, _) if left.is_some() => Some(theme.diff_delete_bg),
+                (_, ChangeTag::Insert) if right.is_some() => Some(theme.diff_insert_bg),
+                _ => None,
+            };
+
+            let content_text = format!("{left_disp}{sep}{right_disp}");
+            let line = Line::from(vec![
+                Span::raw(indent.to_string()),
+                Span::styled(old_num, theme.muted()),
+                Span::raw(GUTTER_GAP),
+                Span::styled(left_disp, left_style),
+                Span::styled(sep.to_string(), theme.muted()),
+                Span::styled(new_num, theme.muted()),
+                Span::raw(GUTTER_GAP),
+                Span::styled(right_disp, right_style),
+            ]);
+            lines.push(DiffLineOutput {
+                line,
+                background: bg,
+                content_start_col: (indent_width + gutter_each) as u16,
+                gutter_span_count: 3,
+                content_text,
+                joiner: None,
+                is_separator: false,
+            });
+        }
+    }
     lines
 }
 
@@ -1216,6 +1488,9 @@ impl EditToolCallBlock {
                     indent_bg: edit_cfg.indent_bg,
                     hunk_separator: edit_cfg.hunk_separator.clone(),
                     dual_line_numbers: edit_cfg.dual_line_numbers,
+                    layout: DiffLayout::parse(&crate::appearance::cache::load_diff_layout())
+                        .or_else(|| DiffLayout::parse(&edit_cfg.diff_layout))
+                        .unwrap_or(DiffLayout::Unified),
                 };
                 // Header with word-wrap and hanging indent
                 let header = self.header_line(

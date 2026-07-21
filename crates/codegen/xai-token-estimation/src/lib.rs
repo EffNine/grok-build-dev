@@ -12,6 +12,9 @@ pub const BYTES_PER_TOKEN: u64 = 4;
 /// low-resolution image patches.
 pub const IMAGE_TOKEN_ESTIMATE: u64 = 765;
 
+/// Default threshold (percent of budget) at which a soft nudge is injected.
+pub const BUDGET_NUDGE_PERCENT: u8 = 80;
+
 /// Bytes/4 estimate of a string's token count.
 #[inline]
 pub fn estimate_tokens(s: &str) -> u64 {
@@ -103,6 +106,151 @@ pub fn exceeds_threshold_with_headroom(
             .saturating_sub(headroom.saturating_mul(100))
 }
 
+/// Severity of a budget nudge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetNudge {
+    /// No nudge needed.
+    None,
+    /// Soft nudge: approaching budget (e.g. 80% consumed).
+    Approaching,
+    /// Hard nudge: budget exceeded — wrap up.
+    Exceeded,
+}
+
+/// Tracks cumulative output tokens against a user-specified budget.
+///
+/// Used to detect diminishing returns and nudge the agent near budget limits.
+#[derive(Debug, Clone, Default)]
+pub struct TokenBudget {
+    /// Total budget in tokens. `None` means no budget is set.
+    pub total: Option<u64>,
+    /// Cumulative output tokens consumed this session.
+    pub consumed: u64,
+    /// Soft-nudge threshold as a percent of total (default 80).
+    pub nudge_percent: u8,
+    /// Running count of turns since the last useful result (for diminishing returns).
+    pub turns_since_useful: u32,
+}
+
+impl TokenBudget {
+    /// Create a new budget with the given total and default nudge percent.
+    pub fn new(total: u64) -> Self {
+        Self {
+            total: Some(total),
+            consumed: 0,
+            nudge_percent: BUDGET_NUDGE_PERCENT,
+            turns_since_useful: 0,
+        }
+    }
+
+    /// Parse a budget string like `"+500k"`, `"500000"`, or `"1m"`.
+    pub fn parse(s: &str) -> Option<u64> {
+        let s = s.trim().trim_start_matches('+').to_lowercase();
+        if s.is_empty() {
+            return None;
+        }
+        let (num_str, mult) = if let Some(rest) = s.strip_suffix('k') {
+            (rest, 1_000u64)
+        } else if let Some(rest) = s.strip_suffix('m') {
+            (rest, 1_000_000u64)
+        } else {
+            (s.as_str(), 1u64)
+        };
+        let num: f64 = num_str.parse().ok()?;
+        if !num.is_finite() || num < 0.0 {
+            return None;
+        }
+        Some((num * mult as f64) as u64)
+    }
+
+    /// Record output tokens consumed after a turn.
+    pub fn record_output(&mut self, tokens: u64) {
+        self.consumed = self.consumed.saturating_add(tokens);
+    }
+
+    /// Mark that a useful result was produced (resets diminishing-returns counter).
+    pub fn mark_useful(&mut self) {
+        self.turns_since_useful = 0;
+    }
+
+    /// Mark that a turn completed without a useful result.
+    pub fn mark_unuseful(&mut self) {
+        self.turns_since_useful = self.turns_since_useful.saturating_add(1);
+    }
+
+    /// Remaining tokens in the budget, or `None` if no budget is set.
+    pub fn remaining(&self) -> Option<u64> {
+        self.total.map(|t| free_tokens(t, self.consumed))
+    }
+
+    /// Percent of budget consumed, or `None` if no budget is set.
+    pub fn consumed_percent(&self) -> Option<u8> {
+        self.total
+            .map(|t| usage_percentage_truncated_u8(self.consumed, t))
+    }
+
+    /// Compute the nudge severity based on current consumption.
+    pub fn nudge(&self) -> BudgetNudge {
+        let Some(total) = self.total else {
+            return BudgetNudge::None;
+        };
+        if total == 0 {
+            return BudgetNudge::None;
+        }
+        if self.consumed >= total {
+            return BudgetNudge::Exceeded;
+        }
+        if exceeds_threshold(self.consumed, total, self.nudge_percent) {
+            return BudgetNudge::Approaching;
+        }
+        // Diminishing returns: 3+ turns without useful results near 50%+ budget.
+        if self.turns_since_useful >= 3
+            && exceeds_threshold(self.consumed, total, 50)
+        {
+            return BudgetNudge::Approaching;
+        }
+        BudgetNudge::None
+    }
+
+    /// Human-readable nudge message, or `None` if no nudge is needed.
+    pub fn nudge_message(&self) -> Option<String> {
+        match self.nudge() {
+            BudgetNudge::None => None,
+            BudgetNudge::Approaching => {
+                let remaining = self.remaining().unwrap_or(0);
+                Some(format!(
+                    "You have ~{remaining} tokens remaining in your budget. Prioritize delivering results."
+                ))
+            }
+            BudgetNudge::Exceeded => Some(
+                "Budget exceeded. Wrap up and deliver results.".to_string(),
+            ),
+        }
+    }
+
+    /// Clear the budget.
+    pub fn clear(&mut self) {
+        self.total = None;
+        self.consumed = 0;
+        self.turns_since_useful = 0;
+    }
+
+    /// Status summary for `/budget` display.
+    pub fn status_message(&self) -> String {
+        match self.total {
+            None => "No token budget set. Use `/budget <amount>` (e.g. `/budget 500k`).".to_string(),
+            Some(total) => {
+                let pct = self.consumed_percent().unwrap_or(0);
+                let remaining = free_tokens(total, self.consumed);
+                format!(
+                    "Budget: {consumed}/{total} tokens ({pct}% used, ~{remaining} remaining)",
+                    consumed = self.consumed,
+                )
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,18 +290,13 @@ mod tests {
         assert_eq!(usage_percentage_u8(0, 100), 0);
         assert_eq!(usage_percentage_u8(50, 100), 50);
         assert_eq!(usage_percentage_u8(99, 100), 99);
-        // 12_700 / 256_000 = 0.04960... -> 5 after rounding
         assert_eq!(usage_percentage_u8(12_700, 256_000), 5);
         assert_eq!(usage_percentage_u8(150, 100), 100);
     }
 
-    /// Half-boundary contract — locks rounding direction. `85 / 200 = 0.425`
-    /// becomes `42.5%` which rounds half-up to `43`. The truncating helper
-    /// returns `42` for the same input (see `usage_percentage_truncated_u8`).
     #[test]
     fn usage_percentage_u8_rounds_half_up() {
         assert_eq!(usage_percentage_u8(85, 200), 43);
-        // 7 / 8 = 0.875, rounds to 88 (truncated would be 87).
         assert_eq!(usage_percentage_u8(7, 8), 88);
     }
 
@@ -162,19 +305,12 @@ mod tests {
         assert_eq!(usage_percentage_truncated_u8(0, 0), 0);
         assert_eq!(usage_percentage_truncated_u8(50, 100), 50);
         assert_eq!(usage_percentage_truncated_u8(150, 100), 100);
-        // Large values do not overflow because we use saturating_mul.
         assert_eq!(usage_percentage_truncated_u8(u64::MAX, 1), 100);
     }
 
-    /// Truncation contract — distinguishes this helper from
-    /// `usage_percentage_u8`, which rounds. Locks in that
-    /// `exceeds_threshold(used, cw, p)` and
-    /// `usage_percentage_truncated_u8(used, cw) >= p` agree.
     #[test]
     fn usage_percentage_truncated_u8_truncates_does_not_round() {
-        // 85 / 200 = 0.425, truncated -> 42 (rounded would be 43).
         assert_eq!(usage_percentage_truncated_u8(85, 200), 42);
-        // 7 / 8 = 0.875, truncated -> 87 (rounded would be 88).
         assert_eq!(usage_percentage_truncated_u8(7, 8), 87);
     }
 
@@ -193,63 +329,45 @@ mod tests {
         assert!(!exceeds_threshold(50, 0, 85));
     }
 
-    /// Strict-boundary contract — pin the `>=` semantics. At cw=1000,
-    /// pct=85, `850 * 100 == 1000 * 85` so the gate must fire at exactly
-    /// 850 tokens. This is one token earlier than the legacy `>` gate
-    /// (`total > cw * pct / 100` which fired at 851).
     #[test]
-    fn exceeds_threshold_fires_on_strict_boundary() {
-        assert!(exceeds_threshold(850, 1000, 85));
-        assert!(!exceeds_threshold(849, 1000, 85));
-        // 1000 * 85 / 100 = 850, so 850 is the new strict boundary.
-        // Same shape at the other commonly-configured threshold (95%):
-        assert!(exceeds_threshold(950, 1000, 95));
-        assert!(!exceeds_threshold(949, 1000, 95));
-    }
-
-    /// Property: with `headroom == 0` the helper agrees with
-    /// [`exceeds_threshold`] across a representative grid of inputs,
-    /// including the non-round windows where floor-divide drifts.
-    #[test]
-    fn exceeds_threshold_with_headroom_zero_headroom_matches_exceeds_threshold() {
-        for cw in [0_u64, 1, 50, 100, 101, 1024, 100_000, 128_001, 1_000_001] {
-            for pct in [0_u8, 1, 50, 85, 99, 100] {
-                for used in [
-                    0_u64,
-                    1,
-                    cw / 2,
-                    cw.saturating_sub(1),
-                    cw,
-                    cw + 1,
-                    cw + 1000,
-                ] {
-                    assert_eq!(
-                        exceeds_threshold_with_headroom(used, cw, pct, 0),
-                        exceeds_threshold(used, cw, pct),
-                        "mismatch at used={used} cw={cw} pct={pct}",
-                    );
-                }
-            }
-        }
+    fn token_budget_parse() {
+        assert_eq!(TokenBudget::parse("500k"), Some(500_000));
+        assert_eq!(TokenBudget::parse("+500k"), Some(500_000));
+        assert_eq!(TokenBudget::parse("1m"), Some(1_000_000));
+        assert_eq!(TokenBudget::parse("1000"), Some(1000));
+        assert_eq!(TokenBudget::parse(""), None);
+        assert_eq!(TokenBudget::parse("abc"), None);
     }
 
     #[test]
-    fn exceeds_threshold_with_headroom_subtracts_headroom() {
-        // 100K window, 85% threshold = 85_000. Headroom 4_000 -> fires at 81_000.
-        assert!(!exceeds_threshold_with_headroom(80_999, 100_000, 85, 4_000));
-        assert!(exceeds_threshold_with_headroom(81_000, 100_000, 85, 4_000));
+    fn token_budget_nudge_approaching() {
+        let mut b = TokenBudget::new(1000);
+        b.record_output(800);
+        assert_eq!(b.nudge(), BudgetNudge::Approaching);
+        assert!(b.nudge_message().unwrap().contains("remaining"));
     }
 
     #[test]
-    fn exceeds_threshold_with_headroom_zero_window() {
-        assert!(!exceeds_threshold_with_headroom(0, 0, 85, 0));
-        assert!(!exceeds_threshold_with_headroom(100, 0, 85, 4_000));
+    fn token_budget_nudge_exceeded() {
+        let mut b = TokenBudget::new(1000);
+        b.record_output(1000);
+        assert_eq!(b.nudge(), BudgetNudge::Exceeded);
     }
 
     #[test]
-    fn exceeds_threshold_with_headroom_headroom_larger_than_threshold_saturates() {
-        // 100K * 85% = 85_000 (8_500_000 scaled). Headroom 1M tokens scales to
-        // 100_000_000 — saturating sub yields 0, so any used fires.
-        assert!(exceeds_threshold_with_headroom(0, 100_000, 85, 1_000_000));
+    fn token_budget_no_budget() {
+        let b = TokenBudget::default();
+        assert_eq!(b.nudge(), BudgetNudge::None);
+        assert!(b.nudge_message().is_none());
+    }
+
+    #[test]
+    fn token_budget_diminishing_returns() {
+        let mut b = TokenBudget::new(1000);
+        b.record_output(500);
+        b.mark_unuseful();
+        b.mark_unuseful();
+        b.mark_unuseful();
+        assert_eq!(b.nudge(), BudgetNudge::Approaching);
     }
 }

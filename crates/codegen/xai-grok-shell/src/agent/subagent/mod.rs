@@ -273,6 +273,8 @@ pub(crate) struct SubagentSpawnContext {
     /// Whether tools should respect `.gitignore` patterns.
     /// Inherited from the parent session.
     pub respect_gitignore: bool,
+    /// Glob patterns blocked from file tools. Inherited from the parent.
+    pub blocked_paths: Vec<String>,
     /// Whether to enrich path-not-found errors with hints.
     /// Inherited from the parent session.
     pub path_not_found_hints: bool,

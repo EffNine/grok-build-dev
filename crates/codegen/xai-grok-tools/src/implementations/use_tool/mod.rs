@@ -371,6 +371,21 @@ impl xai_tool_runtime::Tool for UseTool {
             });
         }
 
+        // If the target MCP tool was deferred (kept out of the model's tool
+        // list at init time), register it now before dispatching.
+        if input.tool_name.contains("__") {
+            if let Ok(resources) = crate::types::tool_metadata::shared_resources(&ctx) {
+                let guard = resources.lock().await;
+                if let Some(callback) =
+                    guard.get::<crate::types::resources::DeferredToolCallback>()
+                {
+                    let cb = callback.clone();
+                    drop(guard);
+                    cb.0(&input.tool_name).await;
+                }
+            }
+        }
+
         let output =
             dispatch_mcp_tool(&ctx, &input.tool_name, input.tool_input, "use_tool").await?;
 

@@ -22,7 +22,7 @@ use crate::types::requirements::{Expr, ToolParamsRequirement, ToolRequirement};
 #[allow(unused_imports)]
 use crate::types::resources::{
     Cwd, DisplayCwd, FileSystem, GitignoreFilter, NotificationHandle, Params, PathNotFoundHints,
-    RespectGitignore, SharedResources, display_cwd_or_cwd, resolve_model_path,
+    RespectGitignore, SharedResources, blocked_path_error, display_cwd_or_cwd, resolve_model_path,
 };
 use crate::types::template_renderer::TemplateRenderer;
 use crate::types::tool::{ToolKind, ToolNamespace};
@@ -171,17 +171,24 @@ pub(crate) async fn run_search_replace(
         ));
     }
     let is_legacy = SearchReplaceVersion::from_contract(contract_version.as_deref()).is_legacy();
-    if !is_legacy {
+    {
         let res = resources.lock().await;
-        let respect_gitignore = res.get::<RespectGitignore>().is_none_or(|r| r.0);
-        if respect_gitignore
-            && let Some(filter) = res.get::<GitignoreFilter>()
-            && filter.is_ignored(&path)
+        if !is_legacy {
+            let respect_gitignore = res.get::<RespectGitignore>().is_none_or(|r| r.0);
+            if respect_gitignore
+                && let Some(filter) = res.get::<GitignoreFilter>()
+                && filter.is_ignored(&path)
+            {
+                return Ok(SearchReplaceOutput::InvalidInput(format!(
+                    "Error: {} is ignored by .gitignore and cannot be edited.",
+                    input.file_path
+                )));
+            }
+        }
+        if let Some(msg) =
+            blocked_path_error(&res, &path, &cwd, std::path::Path::new(&input.file_path))
         {
-            return Ok(SearchReplaceOutput::InvalidInput(format!(
-                "Error: {} is ignored by .gitignore and cannot be edited.",
-                input.file_path
-            )));
+            return Ok(SearchReplaceOutput::InvalidInput(msg));
         }
     }
     if input.old_string == input.new_string {

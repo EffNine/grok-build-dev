@@ -22,8 +22,8 @@ mod versions;
 use crate::types::output::{ListDirContent, ListDirOutput};
 #[allow(unused_imports)]
 use crate::types::resources::{
-    DisplayCwd, Params, PathNotFoundHints, RespectGitignore, SharedResources, display_cwd_or_cwd,
-    resolve_model_path,
+    BlockedPaths, DisplayCwd, Params, PathNotFoundHints, RespectGitignore, SharedResources,
+    blocked_path_error, display_cwd_or_cwd, resolve_model_path,
 };
 use crate::types::template_renderer::TemplateRenderer;
 use crate::types::tool::{ToolKind, ToolNamespace};
@@ -279,14 +279,28 @@ impl DirNode {
         format!("{indent}{summary}\n")
     }
 }
-/// Shared `WalkBuilder` for seed and deep walk (same `RespectGitignore` flags).
-fn list_dir_walk_builder(root: &Path, respect_gitignore: bool) -> ignore::WalkBuilder {
+/// Shared `WalkBuilder` for seed and deep walk (same `RespectGitignore` flags
+/// plus optional `blocked_paths` exclude overrides).
+fn list_dir_walk_builder(
+    root: &Path,
+    respect_gitignore: bool,
+    blocked_patterns: &[String],
+) -> ignore::WalkBuilder {
     let mut builder = ignore::WalkBuilder::new(root);
     builder
         .standard_filters(true)
         .git_ignore(respect_gitignore)
         .git_global(respect_gitignore)
         .git_exclude(respect_gitignore);
+    if !blocked_patterns.is_empty() {
+        let mut overrides = ignore::overrides::OverrideBuilder::new(root);
+        for pat in blocked_patterns {
+            let _ = overrides.add(&format!("!{pat}"));
+        }
+        if let Ok(ov) = overrides.build() {
+            builder.overrides(ov);
+        }
+    }
     builder
 }
 /// Seed depth-1 before budgeted walk so later siblings survive `MAX_GLOBAL_ITEMS` starvation.
@@ -295,9 +309,10 @@ fn seed_depth1_children(
     root: &Path,
     root_node: &mut DirNode,
     respect_gitignore: bool,
+    blocked_patterns: &[String],
     max_seed: usize,
 ) -> bool {
-    let walker = list_dir_walk_builder(root, respect_gitignore)
+    let walker = list_dir_walk_builder(root, respect_gitignore, blocked_patterns)
         .max_depth(Some(1))
         .build();
     let mut seed_count: usize = 0;
@@ -321,18 +336,24 @@ fn seed_depth1_children(
     false
 }
 /// Depth-1 seed first, then deep walk; only depth ≥ 2 counts toward `max_items`.
-fn build_tree(root: &Path, respect_gitignore: bool) -> (DirNode, bool) {
-    build_tree_with_limit(root, respect_gitignore, MAX_GLOBAL_ITEMS)
+fn build_tree(root: &Path, respect_gitignore: bool, blocked_patterns: &[String]) -> (DirNode, bool) {
+    build_tree_with_limit(root, respect_gitignore, blocked_patterns, MAX_GLOBAL_ITEMS)
 }
 fn build_tree_with_limit(
     root: &Path,
     respect_gitignore: bool,
+    blocked_patterns: &[String],
     max_items: usize,
 ) -> (DirNode, bool) {
     let mut root_node = DirNode::new(0);
-    let seed_truncated =
-        seed_depth1_children(root, &mut root_node, respect_gitignore, MAX_SEED_ITEMS);
-    let walker = list_dir_walk_builder(root, respect_gitignore).build();
+    let seed_truncated = seed_depth1_children(
+        root,
+        &mut root_node,
+        respect_gitignore,
+        blocked_patterns,
+        MAX_SEED_ITEMS,
+    );
+    let walker = list_dir_walk_builder(root, respect_gitignore, blocked_patterns).build();
     let mut item_count: usize = 0;
     let mut walk_truncated = false;
     for entry in walker {
@@ -498,6 +519,12 @@ impl xai_tool_runtime::Tool for ListDirTool {
         let path = resolve_model_path(&cwd, display_cwd.as_deref(), &input.target_directory);
         let display_base = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
         let display_path = compute_display_path(&display_base, &input.target_directory);
+        {
+            let res = resources.lock().await;
+            if let Some(msg) = blocked_path_error(&res, &path, &cwd, &display_path) {
+                return Ok(ListDirOutput::Error(msg));
+            }
+        }
         let meta = tokio::fs::metadata(&path).await;
         let is_dir = meta.as_ref().is_ok_and(|m| m.is_dir());
         if !is_dir {
@@ -543,7 +570,7 @@ impl xai_tool_runtime::Tool for ListDirTool {
                 .unwrap_or(crate::DEFAULT_TOOL_OUTPUT_BYTES);
             versions::legacy_0_4_10::render_legacy(&path, max_output_bytes)
         } else {
-            let (max_output_chars, respect_gitignore, truncation_notice) = {
+            let (max_output_chars, respect_gitignore, truncation_notice, blocked_patterns) = {
                 let res = resources.lock().await;
                 let max_output_chars = res
                     .get::<Params<ListDirParams>>()
@@ -551,9 +578,18 @@ impl xai_tool_runtime::Tool for ListDirTool {
                     .unwrap_or(DEFAULT_MAX_OUTPUT_CHARS);
                 let respect_gitignore = res.get::<RespectGitignore>().is_none_or(|r| r.0);
                 let truncation_notice = root_truncation_notice(res.get::<TemplateRenderer>());
-                (max_output_chars, respect_gitignore, truncation_notice)
+                let blocked_patterns = res
+                    .get::<BlockedPaths>()
+                    .map(|b| b.patterns().to_vec())
+                    .unwrap_or_default();
+                (
+                    max_output_chars,
+                    respect_gitignore,
+                    truncation_notice,
+                    blocked_patterns,
+                )
             };
-            let (mut tree, truncated) = build_tree(&path, respect_gitignore);
+            let (mut tree, truncated) = build_tree(&path, respect_gitignore, &blocked_patterns);
             budget_expand(
                 &mut tree,
                 max_output_chars,
@@ -648,7 +684,7 @@ mod tests {
         let deep = tmp.path().join("a").join("b").join("c");
         fs::create_dir_all(&deep).unwrap();
         File::create(deep.join("deep.rs")).unwrap();
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc) = build_tree(tmp.path(), true, &[]);
         let body = budget_expand(
             &mut tree,
             DEFAULT_MAX_OUTPUT_CHARS,
@@ -672,7 +708,7 @@ mod tests {
         for i in 0..50 {
             File::create(subdir.join(format!("file{}.rs", i))).unwrap();
         }
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc) = build_tree(tmp.path(), true, &[]);
         let body = budget_expand(
             &mut tree,
             200,
@@ -693,7 +729,7 @@ mod tests {
     #[test]
     fn empty_directory_renders_nothing() {
         let tmp = TempDir::new().unwrap();
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc) = build_tree(tmp.path(), true, &[]);
         let body = budget_expand(
             &mut tree,
             DEFAULT_MAX_OUTPUT_CHARS,
@@ -712,7 +748,7 @@ mod tests {
         File::create(tmp.path().join(".hidden")).unwrap();
         File::create(tmp.path().join(".secret.txt")).unwrap();
         File::create(tmp.path().join("visible.rs")).unwrap();
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc) = build_tree(tmp.path(), true, &[]);
         let body = budget_expand(
             &mut tree,
             DEFAULT_MAX_OUTPUT_CHARS,
@@ -734,7 +770,7 @@ mod tests {
                 File::create(subdir.join(format!("file_{}.rs", j))).unwrap();
             }
         }
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc) = build_tree(tmp.path(), true, &[]);
         let body = budget_expand(
             &mut tree,
             200,
@@ -770,7 +806,7 @@ mod tests {
     fn walk_truncation_shows_cutoff_message() {
         let tmp = TempDir::new().unwrap();
         File::create(tmp.path().join("file.rs")).unwrap();
-        let (mut tree, _) = build_tree(tmp.path(), true);
+        let (mut tree, _) = build_tree(tmp.path(), true, &[]);
         let body = budget_expand(
             &mut tree,
             DEFAULT_MAX_OUTPUT_CHARS,
@@ -792,7 +828,7 @@ mod tests {
         fs::create_dir(&dir_b).unwrap();
         File::create(dir_a.join("a.rs")).unwrap();
         File::create(dir_b.join("b.rs")).unwrap();
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc) = build_tree(tmp.path(), true, &[]);
         let body = budget_expand(
             &mut tree,
             DEFAULT_MAX_OUTPUT_CHARS,
@@ -814,7 +850,7 @@ mod tests {
         for i in 0..50 {
             File::create(big.join(format!("f{}.rs", i))).unwrap();
         }
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc) = build_tree(tmp.path(), true, &[]);
         let body = budget_expand(
             &mut tree,
             400,
@@ -842,7 +878,7 @@ mod tests {
         let small = tmp.path().join("zzz_small");
         fs::create_dir(&small).unwrap();
         File::create(small.join("s.rs")).unwrap();
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc) = build_tree(tmp.path(), true, &[]);
         let body = budget_expand(
             &mut tree,
             200,
@@ -883,7 +919,7 @@ mod tests {
         fs::create_dir(&ddd).unwrap();
         File::create(bbb.join("s1.rs")).unwrap();
         File::create(ddd.join("s2.rs")).unwrap();
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc) = build_tree(tmp.path(), true, &[]);
         let body = budget_expand(
             &mut tree,
             BUDGET,
@@ -934,7 +970,7 @@ mod tests {
             File::create(tmp.path().join(format!("f{}.rs", i))).unwrap();
         }
         let mut root_node = DirNode::new(0);
-        let truncated = seed_depth1_children(tmp.path(), &mut root_node, true, SEED_LIMIT);
+        let truncated = seed_depth1_children(tmp.path(), &mut root_node, true, &[], SEED_LIMIT);
         assert!(truncated, "10 depth-1 entries should exceed seed cap of 3");
         root_node.sort_recursive();
         let body = budget_expand(
@@ -969,7 +1005,7 @@ mod tests {
         }
         File::create(zzz.join("late.rs")).unwrap();
         const WALK_LIMIT: usize = 5;
-        let (mut tree, truncated) = build_tree_with_limit(tmp.path(), true, WALK_LIMIT);
+        let (mut tree, truncated) = build_tree_with_limit(tmp.path(), true, &[], WALK_LIMIT);
         assert!(truncated, "30 depth≥2 files should exceed limit of 5");
         assert!(
             tree.subdirs.iter().any(|s| s == "zzz/"),
@@ -1002,7 +1038,7 @@ mod tests {
         }
         File::create(late.join("marker.rs")).unwrap();
         File::create(tmp.path().join("readme.md")).unwrap();
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc) = build_tree(tmp.path(), true, &[]);
         let body = budget_expand(
             &mut tree,
             DEFAULT_MAX_OUTPUT_CHARS,
@@ -1033,7 +1069,7 @@ mod tests {
         fs::create_dir(tmp.path().join("zzz_ignored")).unwrap();
         File::create(tmp.path().join("zzz_ignored").join("inner.rs")).unwrap();
         fs::write(tmp.path().join(".gitignore"), "*.log\nzzz_ignored/\n").unwrap();
-        let (mut tree_off, trunc_off) = build_tree(tmp.path(), false);
+        let (mut tree_off, trunc_off) = build_tree(tmp.path(), false, &[]);
         let body_off = budget_expand(
             &mut tree_off,
             DEFAULT_MAX_OUTPUT_CHARS,
@@ -1049,7 +1085,7 @@ mod tests {
             body_off.contains("- zzz_ignored/"),
             "respect_gitignore=false must seed gitignored dir: {body_off}"
         );
-        let (mut tree_on, trunc_on) = build_tree(tmp.path(), true);
+        let (mut tree_on, trunc_on) = build_tree(tmp.path(), true, &[]);
         let body_on = budget_expand(
             &mut tree_on,
             DEFAULT_MAX_OUTPUT_CHARS,
@@ -1082,7 +1118,7 @@ mod tests {
         let scripts = tmp.path().join("scripts");
         fs::create_dir(&scripts).unwrap();
         File::create(scripts.join("one.py")).unwrap();
-        let (mut tree, trunc) = build_tree(tmp.path(), true);
+        let (mut tree, trunc) = build_tree(tmp.path(), true, &[]);
         let body = budget_expand(
             &mut tree,
             BUDGET,

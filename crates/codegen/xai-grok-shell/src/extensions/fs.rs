@@ -177,7 +177,12 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
             let req = parse_params::<FsListRequest>(args)?;
             let path = resolve_path(agent, &req.path, req.session_id.as_ref())?;
             let (path, confine_root) = confine_local(agent, &path, req.session_id.as_ref()).await?;
-            let params = req.to_params();
+            let mut params = req.to_params();
+            // Merge session-level tools.blocked_paths so ACP fs/list respects
+            // the same exclusions as Read/Grep/ListDir.
+            params
+                .exclude_globs
+                .extend(agent.cfg.borrow().blocked_paths.iter().cloned());
             let result = fs::list(&path, &params, confine_root).await;
             to_ext_response(result)
         }

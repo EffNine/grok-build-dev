@@ -89,6 +89,35 @@ thread_local! {
     static TIMESTAMPS_LOADED: Cell<bool> = const { Cell::new(false) };
 }
 
+thread_local! {
+    static DIFF_LAYOUT_CURRENT: std::cell::RefCell<String> =
+        const { std::cell::RefCell::new(String::new()) };
+    static DIFF_LAYOUT_LOADED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Current edit-diff layout (`"unified"` or `"side_by_side"`).
+pub fn load_diff_layout() -> String {
+    DIFF_LAYOUT_LOADED.with(|loaded| {
+        if !loaded.get() {
+            DIFF_LAYOUT_CURRENT.with(|c| {
+                let mut slot = c.borrow_mut();
+                if slot.is_empty() {
+                    *slot = "unified".to_string();
+                }
+            });
+            loaded.set(true);
+        }
+    });
+    DIFF_LAYOUT_CURRENT.with(|c| c.borrow().clone())
+}
+
+pub fn set_diff_layout(layout: &str) {
+    DIFF_LAYOUT_CURRENT.with(|c| {
+        *c.borrow_mut() = layout.to_string();
+    });
+    DIFF_LAYOUT_LOADED.with(|l| l.set(true));
+}
+
 pub fn load_timestamps() -> bool {
     TIMESTAMPS_LOADED.with(|loaded| {
         if !loaded.get() {

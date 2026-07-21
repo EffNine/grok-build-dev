@@ -515,6 +515,10 @@ pub enum Action {
     SetCompactMode(bool),
     /// Set timestamp display on messages.
     SetTimestamps(bool),
+    /// Toggle edit-diff layout between unified and side-by-side.
+    ToggleDiffLayout,
+    /// Set edit-diff layout (`"unified"` or `"side_by_side"`).
+    SetDiffLayout(String),
     /// Set timeline sidebar visibility (per-turn tick rail).
     SetTimeline(bool),
     /// Set `[ui].page_flip_on_send` (default ON). Persists via `Effect::PersistSetting`.
