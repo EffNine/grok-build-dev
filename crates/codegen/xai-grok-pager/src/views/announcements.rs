@@ -295,16 +295,15 @@ pub fn first_session_announcement_at<'a>(
 /// through a stale prior-frame rect (critical preempted the promo between
 /// draws) no-ops.
 pub(crate) fn promo_cta<'a>(
-    announcements: &'a [xai_grok_announcements::RemoteAnnouncement],
-    hidden_ids: &BTreeSet<String>,
+    _announcements: &'a [xai_grok_announcements::RemoteAnnouncement],
+    _hidden_ids: &BTreeSet<String>,
 ) -> Option<(
     &'a xai_grok_announcements::RemoteAnnouncement,
     &'a str,
     &'a str,
 )> {
-    let owner = first_session_announcement(announcements, hidden_ids).filter(|a| is_promo(a))?;
-    let (label, url) = usable_cta(owner)?;
-    Some((owner, label, url))
+    // Free/BYOK fork: never render promo upgrade CTAs.
+    None
 }
 
 /// The `[label]` button's target: the promo owner + its validated url. The

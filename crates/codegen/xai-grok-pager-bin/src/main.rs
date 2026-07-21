@@ -154,7 +154,7 @@ async fn run_setup_command(json: bool) {
     if !managed_config::has_principal() {
         eprintln!("No deployment key or team sign-in found.");
         eprintln!();
-        eprintln!("To install managed configuration, sign in with a team using `grok login`,");
+        eprintln!("To install managed configuration, set XAI_API_KEY + GROK_MODELS_BASE_URL,");
         eprintln!("or set a deployment key:");
         eprintln!();
         if cfg!(unix) {
@@ -534,7 +534,7 @@ async fn workspace_start(
     ensure_authenticated(
         &agent_config.grok_com_config,
         false,
-        Some("No cached credentials found. Run `grok login` first."),
+        Some("No API key configured. Set XAI_API_KEY and GROK_MODELS_BASE_URL, or run `/byok` in the TUI."),
     )
     .await?;
     let env_urls = LeaderEnvUrls::from(&agent_config.grok_com_config);
@@ -1894,18 +1894,23 @@ async fn async_main() -> Result<()> {
             }
             Command::Login {
                 legacy: _,
-                oauth,
-                device_auth,
-                devbox,
+                oauth: _,
+                device_auth: _,
+                devbox: _,
             } => {
                 init_tracing_simple("cli");
-                let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
-                let config = xai_grok_shell::config::load_effective_config_disk_only()
-                    .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
-                let config = AgentConfig::new_from_toml_cfg(&config)
-                    .map_err(|e| anyhow::anyhow!("Failed to create agent config: {e}"))?;
-                xai_grok_shell::auth::run_cli_login(&config, oauth, device_auth, devbox).await?;
+                println!("OAuth login is disabled in this free/BYOK build.");
                 println!();
+                println!("Configure your provider with either:");
+                println!("  1. Environment variables:");
+                println!("       export XAI_API_KEY=sk-...");
+                println!("       export GROK_MODELS_BASE_URL=https://api.example.com/v1");
+                println!("       grok");
+                println!();
+                println!("  2. In the TUI:");
+                println!("       /byok <api_key> <base_url>");
+                println!();
+                println!("The app will fetch all available models from {{base_url}}/models.");
                 xai_grok_shell::instrumentation::finalize_and_exit(0);
             }
             Command::Logout => {

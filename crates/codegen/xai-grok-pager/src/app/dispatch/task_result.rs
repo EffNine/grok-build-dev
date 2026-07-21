@@ -959,18 +959,37 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             handle_credit_limit_recheck_complete(app, agent_id, meta)
         }
         TaskResult::LogoutComplete => {
-            app.auth_state = AuthState::Pending { error: None };
+            app.auth_state = AuthState::Pending {
+                error: Some(
+                    "API key cleared. Run /byok <api_key> <base_url> to configure again."
+                        .to_string(),
+                ),
+            };
             app.access_gate_shown_logged = false;
             app.announcement_cta_impressions_logged.clear();
             app.gate = None;
             app.pending_gate_verification = None;
             app.last_subscription_check_at = None;
             app.login_method_id = None;
-            ensure_login_method(app);
             app.auth_clipboard_delivery = None;
             let effects = dispatch_exit_session(app);
             app.welcome_prompt_focused = false;
             effects
+        }
+        TaskResult::ByokConfigureComplete {
+            ok,
+            message,
+            model_count: _,
+        } => {
+            if ok {
+                app.auth_state = AuthState::Done;
+                app.is_api_key_auth = true;
+                app.gate = None;
+                app.show_toast(&message);
+            } else {
+                app.show_toast(&message);
+            }
+            vec![]
         }
         TaskResult::DeepSearchResults { results, seq } => {
             handle_deep_search_results(app, results, seq)

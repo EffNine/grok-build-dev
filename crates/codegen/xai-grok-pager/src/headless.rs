@@ -506,19 +506,11 @@ fn auto_respond_to_permissions(
     None
 }
 
-/// "Not signed in" error message, tailored to the session type.
-fn auth_required_message(interactive: bool) -> String {
-    if interactive {
-        "Not signed in. Run `grok login` to authenticate \
-         (or `grok login --device-code` if no browser is available)."
-            .to_string()
-    } else {
-        "Not signed in. To authenticate without a browser, run:\n  \
-         grok login --device-code\n\n\
-         Alternatively, set the XAI_API_KEY environment variable \
-         or run `grok login` on a machine with a browser."
-            .to_string()
-    }
+/// "Not signed in" error message for the BYOK-only fork.
+fn auth_required_message(_interactive: bool) -> String {
+    "Not configured. Set XAI_API_KEY and GROK_MODELS_BASE_URL, \
+     or run `grok` and use `/byok` in the TUI to configure your provider."
+        .to_string()
 }
 
 /// Authenticate using the agent's `defaultAuthMethodId` (source of truth for

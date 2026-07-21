@@ -60,14 +60,13 @@ pub fn has_xai_api_key_env() -> bool {
 /// `GROK_DISABLE_API_KEY_AUTH`) is the admin kill switch: when true the
 /// method is never advertised, regardless of available credentials, so
 /// `XAI_API_KEY` can't bypass a deployment's forced IdP login.
-pub fn should_advertise_xai_api_key<'a, I>(disable_api_key_auth: bool, models: I) -> bool
+pub fn should_advertise_xai_api_key<'a, I>(_disable_api_key_auth: bool, _models: I) -> bool
 where
     I: IntoIterator<Item = &'a ModelEntry>,
 {
-    if disable_api_key_auth {
-        return false;
-    }
-    has_xai_api_key_env() || models.into_iter().any(ModelEntry::has_own_credentials)
+    // Free/BYOK fork: always advertise API-key auth. OAuth / IdP kill-switches
+    // are ignored so the product path never falls through to grok.com login.
+    true
 }
 
 /// Inputs to [`build_auth_methods`].
@@ -115,58 +114,17 @@ pub struct BuiltAuthMethods {
 /// Build the `auth_methods` list and default `auth_method_id` from
 /// pre-computed inputs.
 ///
-/// REGRESSION GUARD: when unpinned and
-/// `has_external_api_key` is true, the **first** entry MUST be `xai.api_key`.
-/// A prior change deferred it to the END for per-model credentials, which made
-/// the pager send per-model-key users to the login screen. Unit tests lock this.
-///
-/// Unpinned ordering (when each method is enabled):
-/// 1. `xai.api_key`     (if `has_external_api_key`)
-/// 2. `cached_token`    (if `has_cached_token`)
-/// 3. exactly one of:
-///    - `oidc`          (if `has_enterprise_oidc`)
-///    - `grok.com`      (otherwise)
-///
-/// Unpinned `default_auth_method_id`:
-/// - `cached_token` if `has_cached_token`
-/// - `xai.api_key`  else if `has_external_api_key`
-/// - `None`         otherwise
-///
-/// Pinned (`preferred_method`):
-/// - `ApiKey`: only `xai.api_key` if available; else empty list + `None` (fail).
-/// - `Oidc`: `cached_token` (if any) + interactive login; never `xai.api_key`.
-///   Default is `cached_token` when present, else `None` (interactive).
-pub fn build_auth_methods(inputs: AuthMethodsBuildInputs<'_>) -> BuiltAuthMethods {
-    let AuthMethodsBuildInputs {
-        has_external_api_key,
-        has_cached_token,
-        has_enterprise_oidc,
-        enterprise_oidc_issuer,
-        login_label,
-        has_auth_provider_command,
-        preferred_method,
-    } = inputs;
-
-    match preferred_method {
-        Some(PreferredAuthMethod::ApiKey) => build_pinned_api_key(has_external_api_key),
-        Some(PreferredAuthMethod::Oidc) => build_pinned_oidc(
-            has_cached_token,
-            has_enterprise_oidc,
-            enterprise_oidc_issuer,
-            login_label,
-            has_auth_provider_command,
-        ),
-        None => build_unpinned(
-            has_external_api_key,
-            has_cached_token,
-            has_enterprise_oidc,
-            enterprise_oidc_issuer,
-            login_label,
-            has_auth_provider_command,
-        ),
+/// Free/BYOK fork: always advertise only `xai.api_key`. OAuth / cached-token /
+/// enterprise OIDC methods are never offered on the product path. Inputs are
+/// accepted for call-site compatibility but ignored.
+pub fn build_auth_methods(_inputs: AuthMethodsBuildInputs<'_>) -> BuiltAuthMethods {
+    BuiltAuthMethods {
+        methods: vec![xai_api_key_auth_method()],
+        default_auth_method_id: Some(acp::AuthMethodId::new(XAI_API_KEY_METHOD_ID)),
     }
 }
 
+#[allow(dead_code)] // retained for reference; free/BYOK fork never pins OIDC
 fn build_pinned_api_key(has_external_api_key: bool) -> BuiltAuthMethods {
     if !has_external_api_key {
         xai_grok_telemetry::unified_log::warn(
@@ -185,6 +143,7 @@ fn build_pinned_api_key(has_external_api_key: bool) -> BuiltAuthMethods {
     }
 }
 
+#[allow(dead_code)] // retained for reference; free/BYOK fork never advertises OIDC
 fn build_pinned_oidc(
     has_cached_token: bool,
     has_enterprise_oidc: bool,
@@ -214,6 +173,7 @@ fn build_pinned_oidc(
     }
 }
 
+#[allow(dead_code)] // retained for reference; free/BYOK fork uses build_auth_methods only
 fn build_unpinned(
     has_external_api_key: bool,
     has_cached_token: bool,
@@ -262,6 +222,7 @@ fn build_unpinned(
     }
 }
 
+#[allow(dead_code)] // retained for reference; free/BYOK fork never pushes interactive login
 fn push_interactive_login(
     methods: &mut Vec<acp::AuthMethod>,
     has_enterprise_oidc: bool,
@@ -388,39 +349,29 @@ pub fn session_token_auth_gate(
 }
 
 pub const AUTH_ERROR_SESSION_EXPIRED: &str =
-    "Session expired. Run `grok login` to re-authenticate.";
+    "Session expired. Set XAI_API_KEY and GROK_MODELS_BASE_URL, or run `/byok` in the TUI.";
 
-pub const AUTH_ERROR_API_KEY: &str = "Authentication failed. Run `grok login`, set XAI_API_KEY, or add api_key to ~/.grok/config.toml.";
+pub const AUTH_ERROR_API_KEY: &str = "Authentication failed. Set XAI_API_KEY and GROK_MODELS_BASE_URL, or run `/byok` in the TUI.";
 
-/// Next ACP method id when `cached_token` cannot proceed (missing / expired /
-/// legacy WebLogin), or `None` when fallthrough is forbidden.
+/// BYOK setup hint used when API-key credentials are missing.
+pub const BYOK_SETUP_MESSAGE: &str = "Set XAI_API_KEY and GROK_MODELS_BASE_URL (or run `/byok` in the TUI) to configure your provider.";
+
+/// Next ACP method id when `cached_token` cannot proceed.
 ///
-/// Unpinned: prefer non-interactive `xai.api_key` when advertiseable, else
-/// interactive `grok.com`.
-///
-/// Pinned `oidc`: **no** fallthrough to api_key — return `None` so the caller
-/// fails auth. Pinned `api_key` should not reach this path (cached_token is
-/// not advertised).
+/// Free/BYOK fork: always fall through to `xai.api_key` (OAuth is unavailable).
 pub fn method_id_after_cached_token_unavailable(
-    has_external_api_key: bool,
-    preferred_method: Option<PreferredAuthMethod>,
+    _has_external_api_key: bool,
+    _preferred_method: Option<PreferredAuthMethod>,
 ) -> Option<&'static str> {
-    match preferred_method {
-        Some(PreferredAuthMethod::Oidc) | Some(PreferredAuthMethod::ApiKey) => None,
-        None => Some(if has_external_api_key {
-            XAI_API_KEY_METHOD_ID
-        } else {
-            GROK_COM_METHOD_ID
-        }),
-    }
+    Some(XAI_API_KEY_METHOD_ID)
 }
 
 /// Error when `preferred_method=api_key` but no key/BYOK credentials exist.
-pub const PREFERRED_API_KEY_UNAVAILABLE: &str = "preferred_method=api_key but no API key is configured (set XAI_API_KEY or model api_key/env_key in config.toml).";
+pub const PREFERRED_API_KEY_UNAVAILABLE: &str = "No API key configured. Set XAI_API_KEY and GROK_MODELS_BASE_URL, or run `/byok` in the TUI.";
 
 /// Error when `preferred_method=oidc` but the session path cannot proceed.
 pub const PREFERRED_OIDC_UNAVAILABLE: &str =
-    "preferred_method=oidc but no session is available. Run `grok login` to authenticate.";
+    "OIDC login is disabled in this build. Set XAI_API_KEY and GROK_MODELS_BASE_URL, or run `/byok`."
 
 pub const XAI_API_KEY_METHOD_ID: &str = "xai.api_key";
 pub fn xai_api_key_auth_method() -> acp::AuthMethod {

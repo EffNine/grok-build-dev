@@ -476,13 +476,7 @@ impl acp::Agent for MvpAgent {
         }
         match arguments.method_id.0.as_ref() {
             auth_method::XAI_API_KEY_METHOD_ID => {
-                if self.cfg.borrow().grok_com_config.api_key_auth_disabled() {
-                    emit_login_span(false, "api_key", None, Some("disabled_by_admin"));
-                    return Err(
-                        acp::Error::auth_required()
-                            .data("API-key auth is disabled by your administrator."),
-                    );
-                }
+                // Free/BYOK fork: never block on admin IdP kill-switch.
                 let mut sampling_config = self.sampling_config.borrow_mut();
                 if sampling_config.api_key.is_none() {
                     if let Ok(api_key) = auth_method::read_xai_api_key_env() {
@@ -500,20 +494,14 @@ impl acp::Agent for MvpAgent {
                                 Some(serde_json::json!({ "error" : e.to_string() })),
                             );
                         }
-                    } else if !self
-                        .models_manager
-                        .models()
-                        .values()
-                        .any(|m| m.has_own_credentials())
-                    {
-                        emit_login_span(false, "api_key", None, Some("no_credentials"));
-                        return Err(
-                            acp::Error::auth_required()
-                                .data(
-                                    "Set XAI_API_KEY or add api_key/env_key to config.toml.",
-                                ),
-                        );
+                    } else if let Some(api_key) = crate::auth::read_api_key(
+                        &crate::util::grok_home::grok_home(),
+                    ) {
+                        sampling_config.api_key = Some(api_key.clone());
+                        unsafe { std::env::set_var("XAI_API_KEY", &api_key) };
                     }
+                    // Missing credentials are OK at authenticate time: the TUI
+                    // can still start and the user configures BYOK via `/byok`.
                 }
                 self.set_auth_method(arguments.method_id.clone());
                 self.sync_process_static_api_key(None);
@@ -528,288 +516,11 @@ impl acp::Agent for MvpAgent {
                 });
                 Ok(Default::default())
             }
-            auth_method::CACHED_TOKEN_AUTH_METHOD_ID => {
-                let auth_meta = AuthRequestMeta::from_json(arguments.meta.as_ref());
-                if auth_meta.force_interactive {
-                    return self
-                        .authenticate(
-                            acp::AuthenticateRequest::new(
-                                    acp::AuthMethodId::new(auth_method::OIDC_METHOD_ID),
-                                )
-                                .meta(arguments.meta),
-                        )
-                        .await;
-                }
-                let current_auth = self.auth_manager.current();
-                let has_current = current_auth.is_some();
-                let is_expired = self.auth_manager.is_expired();
-                let is_devbox = crate::auth::devbox_login::is_devbox_environment();
-                let is_legacy = current_auth
-                    .as_ref()
-                    .is_some_and(|a| a.auth_mode == crate::auth::AuthMode::WebLogin);
-                xai_grok_telemetry::unified_log::info(
-                    "auth cached_token check",
-                    None,
-                    Some(
-                        serde_json::json!(
-                            { "has_current" : has_current, "is_expired" : is_expired,
-                            "is_devbox" : is_devbox, "is_legacy" : is_legacy, }
-                        ),
-                    ),
-                );
-                let pin_blocks_oidc_mint = matches!(
-                    self.cfg.borrow().grok_com_config.preferred_method, Some(crate
-                    ::auth::PreferredAuthMethod::ApiKey)
-                );
-                if is_devbox && is_legacy && !pin_blocks_oidc_mint {
-                    xai_grok_telemetry::unified_log::info(
-                        "auth cached_token: devbox legacy migration starting",
-                        None,
-                        None,
-                    );
-                    match crate::auth::devbox_login::mint_devbox_auth(&self.auth_manager)
-                        .await
-                    {
-                        Ok(new_auth) => {
-                            match self
-                                .auth_manager
-                                .save_without_enrichment(new_auth)
-                                .await
-                            {
-                                Ok(_) => {
-                                    if let Err(e) = self
-                                        .auth_manager
-                                        .remove_scope(crate::auth::LEGACY_AUTH_SCOPE)
-                                    {
-                                        tracing::warn!(
-                                            error = ? e,
-                                            "auth: failed to remove legacy scope (non-fatal)"
-                                        );
-                                    }
-                                    xai_grok_telemetry::unified_log::info(
-                                        "auth cached_token: devbox legacy migration succeeded",
-                                        None,
-                                        None,
-                                    );
-                                }
-                                Err(e) => {
-                                    xai_grok_telemetry::unified_log::warn(
-                                        "auth cached_token: devbox migration save failed",
-                                        None,
-                                        Some(serde_json::json!({ "error" : e.to_string() })),
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            xai_grok_telemetry::unified_log::warn(
-                                "auth cached_token: devbox mint failed, will reject legacy token",
-                                None,
-                                Some(serde_json::json!({ "error" : format!("{e}") })),
-                            );
-                        }
-                    }
-                }
-                let Some(auth) = self.auth_manager.current() else {
-                    let message = if self.auth_manager.is_expired() {
-                        "Session expired, re-authentication required"
-                    } else {
-                        "No cached auth token found"
-                    };
-                    tracing::info!(
-                        % message, "cached_token missing/expired, falling through"
-                    );
-                    xai_grok_telemetry::unified_log::warn(
-                        "auth cached_token fallthrough",
-                        None,
-                        Some(serde_json::json!({ "reason" : message })),
-                    );
-                    return self
-                        .authenticate_after_cached_token_unavailable(arguments)
-                        .await;
-                };
-                if auth.auth_mode == crate::auth::AuthMode::WebLogin {
-                    tracing::info!("auth: rejecting legacy WebLogin token");
-                    xai_grok_telemetry::unified_log::warn(
-                        "auth cached_token legacy rejected",
-                        None,
-                        Some(
-                            serde_json::json!(
-                                { "auth_mode" : format!("{:?}", auth.auth_mode) }
-                            ),
-                        ),
-                    );
-                    self.auth_manager.clear_in_memory();
-                    if let Err(e) = self
-                        .auth_manager
-                        .remove_scope(crate::auth::LEGACY_AUTH_SCOPE)
-                    {
-                        tracing::warn!(
-                            error = ? e,
-                            "auth: failed to remove legacy scope during WebLogin rejection (non-fatal)"
-                        );
-                    }
-                    return self
-                        .authenticate_after_cached_token_unavailable(arguments)
-                        .await;
-                }
-                self.refresh_remote_settings(&auth).await;
-                self.emit_settings_update_notification();
-                self.enforce_grok_code_access(&auth).await;
-                self.maybe_sync_bundle_in_background(false);
-                {
-                    let mut sampling_config = self.sampling_config.borrow_mut();
-                    sampling_config.api_key = Some(auth.key);
-                    tracing::debug!(
-                        "auth: cached_token handler set api_key (SessionToken)"
-                    );
-                    xai_grok_telemetry::unified_log::debug(
-                        "auth: cached_token handler set api_key (SessionToken)",
-                        None,
-                        None,
-                    );
-                }
-                self.set_auth_method(arguments.method_id.clone());
-                self.ensure_telemetry_client();
-                if crate::agent::chat_modes::process_chat_mode_enabled() {
-                    self.chat_modes.warm_in_background();
-                }
-                let uid = self.auth_manager.current().map(|a| a.user_id);
-                emit_login_span(true, "cached_token", uid.as_deref(), None);
-                log_event(xai_grok_telemetry::events::Login {
-                    auth_method: "cached_token".to_string(),
-                    user_id: uid,
-                });
-                self.maybe_fetch_post_auth_settings().await;
-                Ok(self.auth_response_with_meta())
-            }
-            auth_method::GROK_COM_METHOD_ID | auth_method::OIDC_METHOD_ID => {
-                let grok_ctx = self.auth_manager.grok_com_config();
-                let auth_meta = AuthRequestMeta::from_json(arguments.meta.as_ref());
-                tracing::info!(
-                    method = arguments.method_id.0.as_ref(), headless = auth_meta
-                    .headless, reauth = auth_meta.reauth, use_oauth = auth_meta
-                    .use_oauth, "auth: inline auth flow",
-                );
-                xai_grok_telemetry::unified_log::info(
-                    "auth: inline auth flow",
-                    None,
-                    Some(
-                        serde_json::json!(
-                            { "method" : arguments.method_id.0.as_ref(), "headless" :
-                            auth_meta.headless, "reauth" : auth_meta.reauth, "use_oauth"
-                            : auth_meta.use_oauth, }
-                        ),
-                    ),
-                );
-                if auth_meta.reauth {
-                    let _ = self.auth_manager.clear();
-                }
-                let cli_oauth = auth_meta.use_oauth.then_some(true);
-                let use_oidc = self.cfg.borrow().resolve_grok_oauth(cli_oauth);
-                tracing::debug!(
-                    resolved = use_oidc.value, source = ? use_oidc.source,
-                    "auth: method resolved"
-                );
-                xai_grok_telemetry::unified_log::debug(
-                    "auth: method resolved",
-                    None,
-                    Some(
-                        serde_json::json!(
-                            { "use_oidc" : use_oidc.value, "source" : format!("{:?}",
-                            use_oidc.source), }
-                        ),
-                    ),
-                );
-                let login_override = auth_meta.login_override();
-                let mut cancelled = false;
-                let client_seq = auth_meta.request_seq;
-                let auth_result = if !auth_meta.headless {
-                    let (url_tx, url_rx) = tokio::sync::oneshot::channel();
-                    let (code_tx, code_rx) = tokio::sync::mpsc::channel(1);
-                    let (cancel, _guard) = self
-                        .interactive_auth
-                        .begin(
-                            Some(
-                                crate::auth::single_flight::AttemptChannels::new(
-                                    code_tx,
-                                    url_rx,
-                                ),
-                            ),
-                            client_seq,
-                        );
-                    tokio::select! {
-                        biased; _ = cancel.cancelled() => { cancelled = true;
-                        Err(anyhow::anyhow!("Authentication cancelled")) } r = crate
-                        ::auth::run_auth_flow_with_stderr_bridge(& self.auth_manager,
-                        grok_ctx, crate ::auth::AuthChannels { url_tx : Some(url_tx),
-                        code_rx, }, auth_meta.reauth, auth_meta.force_interactive,
-                        login_override,) => r,
-                    }
-                } else {
-                    let (cancel, _guard) = self.interactive_auth.begin(None, client_seq);
-                    tokio::select! {
-                        biased; _ = cancel.cancelled() => { cancelled = true;
-                        Err(anyhow::anyhow!("Authentication cancelled")) } r = crate
-                        ::auth::run_auth_flow(& self.auth_manager, grok_ctx, auth_meta
-                        .reauth, None, None, None, login_override,) => r,
-                    }
-                };
-                let (auth, _did_auth) = auth_result
-                    .map_err(|e| {
-                        emit_login_span(
-                            false,
-                            arguments.method_id.0.as_ref(),
-                            None,
-                            Some(
-                                if cancelled {
-                                    "login_cancelled"
-                                } else {
-                                    "login_flow_failed"
-                                },
-                            ),
-                        );
-                        let mut err = acp::Error::auth_required();
-                        err.message = e.to_string();
-                        err
-                    })?;
-                {
-                    let mut sampling_config = self.sampling_config.borrow_mut();
-                    sampling_config.api_key = Some(auth.key.clone());
-                    tracing::debug!(
-                        "auth: grok.com/oidc handler set api_key (SessionToken)"
-                    );
-                    xai_grok_telemetry::unified_log::debug(
-                        "auth: grok.com/oidc handler set api_key (SessionToken)",
-                        None,
-                        None,
-                    );
-                }
-                self.auth_manager.hot_swap(auth.clone());
-                self.refresh_remote_settings(&auth).await;
-                self.emit_settings_update_notification();
-                self.enforce_grok_code_access(&auth).await;
-                self.maybe_sync_bundle_in_background(false);
-                tokio::task::spawn_local(
-                    crate::managed_config::post_login_sync(Some(auth.clone())),
-                );
-                self.set_auth_method(arguments.method_id.clone());
-                self.models_manager.on_auth_changed().await;
-                if crate::agent::chat_modes::process_chat_mode_enabled() {
-                    self.chat_modes.warm_in_background();
-                }
-                emit_login_span(
-                    true,
-                    arguments.method_id.0.as_ref(),
-                    Some(auth.user_id.as_str()),
-                    None,
-                );
-                log_event(xai_grok_telemetry::events::Login {
-                    auth_method: arguments.method_id.0.as_ref().to_string(),
-                    user_id: Some(auth.user_id.clone()),
-                });
-                self.maybe_fetch_post_auth_settings().await;
-                Ok(self.auth_response_with_meta())
+            auth_method::CACHED_TOKEN_AUTH_METHOD_ID
+            | auth_method::GROK_COM_METHOD_ID
+            | auth_method::OIDC_METHOD_ID => {
+                emit_login_span(false, "oauth_disabled", None, Some("byok_only_fork"));
+                Err(acp::Error::auth_required().data(auth_method::BYOK_SETUP_MESSAGE))
             }
             _ => {
                 Err(
@@ -3171,7 +2882,7 @@ impl acp::Agent for MvpAgent {
         let mut backend_no_bridge_err: Option<acp::Error> = None;
         let method = args.method.clone();
         let result = match method.as_ref() {
-            "x.ai/getApiKey" | "x.ai/setApiKey" => {
+            "x.ai/getApiKey" | "x.ai/setApiKey" | "x.ai/byok/configure" => {
                 crate::extensions::auth::handle(self, &args).await
             }
             "x.ai/session/info" | "x.ai/session/close" | "x.ai/session/list"
