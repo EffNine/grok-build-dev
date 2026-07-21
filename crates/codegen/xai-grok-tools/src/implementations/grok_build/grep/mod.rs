@@ -17,8 +17,8 @@ use crate::DEFAULT_TOOL_OUTPUT_BYTES;
 use crate::types::output::{GrepFileMatch, GrepLineMatch, GrepSearchOutput};
 #[allow(unused_imports)]
 use crate::types::resources::{
-    Cwd, DenyReadGlobs, DisplayCwd, Params, PathNotFoundHints, SharedResources, display_cwd_or_cwd,
-    resolve_model_path,
+    Cwd, DenyReadGlobs, DisplayCwd, Params, PathNotFoundHints, SharedResources, blocked_path_error,
+    display_cwd_or_cwd, resolve_model_path,
 };
 use crate::types::tool::{ToolKind, ToolNamespace};
 use crate::util::truncate::truncate_line;
@@ -697,13 +697,16 @@ async fn prepare_grep(
     use crate::types::tool_metadata::{resolve_cwd, shared_resources};
     let resources = shared_resources(ctx)?;
     let cwd = resolve_cwd(ctx, &resources).await?;
-    let (display_cwd, hints_enabled, deny_read_globs) = {
+    let (display_cwd, hints_enabled, deny_read_globs, blocked_patterns) = {
         let res = resources.lock().await;
         (
             res.get::<DisplayCwd>().map(|d| d.0.clone()),
             res.get::<PathNotFoundHints>().is_some_and(|h| h.0),
             res.get::<DenyReadGlobs>()
                 .map(|d| d.0.clone())
+                .unwrap_or_default(),
+            res.get::<crate::types::resources::BlockedPaths>()
+                .map(|b| b.patterns().to_vec())
                 .unwrap_or_default(),
         )
     };
@@ -717,6 +720,23 @@ async fn prepare_grep(
     // Use display_cwd for output paths so model sees stable paths.
     let display_base = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
     let cwd_display = display_base.display().to_string();
+    {
+        let res = resources.lock().await;
+        let display_workdir = if input.path.as_deref().unwrap_or("").is_empty() {
+            display_base.clone()
+        } else {
+            display_base.join(input.path.as_deref().unwrap_or(""))
+        };
+        if let Some(msg) = blocked_path_error(&res, &workdir, &cwd, &display_workdir) {
+            return Ok(GrepStep::Early(GrepSearchOutput {
+                stdout: msg.into_bytes(),
+                stderr: Vec::new(),
+                exit_code: 2,
+                match_count: 0,
+                file_matches: Vec::new(),
+            }));
+        }
+    }
 
     // Pre-check: if the search path doesn't exist, return enriched hints
     // before rg runs. We intentionally pre-check with metadata() rather
@@ -784,6 +804,9 @@ async fn prepare_grep(
     // manager (ripgrep searches explicit paths even against excludes).
     for deny in &deny_read_globs {
         cmd.arg("--glob").arg(format!("!{deny}"));
+    }
+    for pat in &blocked_patterns {
+        cmd.arg("--glob").arg(format!("!{pat}"));
     }
 
     if let Some(t) = &input.r#type

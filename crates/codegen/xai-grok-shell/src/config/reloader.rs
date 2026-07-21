@@ -877,10 +877,10 @@ ignore = ["/tmp"]
 
     #[test]
     fn memory_config_diff_detects_enabled_change() {
-        let empty = toml::Value::Table(toml::map::Map::new());
+        let disabled: toml::Value = toml::from_str("[memory]\nenabled = false").unwrap();
         let enabled: toml::Value = toml::from_str("[memory]\nenabled = true").unwrap();
 
-        let old = crate::config::MemoryConfig::resolve(false, false, &empty, None);
+        let old = crate::config::MemoryConfig::resolve(false, false, &disabled, None);
         let new = crate::config::MemoryConfig::resolve(false, false, &enabled, None);
         assert_ne!(old, new, "should detect enabled field change");
     }

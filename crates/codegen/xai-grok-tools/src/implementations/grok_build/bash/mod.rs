@@ -1867,6 +1867,15 @@ impl xai_tool_runtime::Tool for BashTool {
         let cwd = crate::types::tool_metadata::resolve_cwd(&ctx, &resources).await?;
         let tool_call_id = ctx.call_id.clone();
 
+        {
+            let res = resources.lock().await;
+            if let Some(blocker) = res.get::<crate::types::resources::BlockedPaths>()
+                && let Some(msg) = blocker.command_references_blocked(&input.command, Some(&cwd))
+            {
+                return Err(xai_tool_runtime::ToolError::invalid_arguments(msg));
+            }
+        }
+
         // --- Read resources ---
         let (backend, session_folder, env, notification_handle, owner_session_id) = {
             let res = resources.lock().await;

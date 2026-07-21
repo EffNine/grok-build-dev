@@ -238,6 +238,7 @@ async fn run_add(args: AddArgs) -> Result<()> {
         tool_timeout_sec: None,
         tool_timeouts: None,
         expose_image_base64: None,
+        deferred: None,
     };
 
     let path = scope_target(args.scope);

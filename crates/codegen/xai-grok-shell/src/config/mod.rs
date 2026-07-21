@@ -10,9 +10,8 @@ pub use xai_grok_config_types::{
 /// Full configuration for the memory system.
 ///
 /// Parsed from the `[memory]` section of `~/.grok/config.toml` or
-/// `.grok/config.toml`. Disabled by default; enabled via
-/// `--experimental-memory` CLI flag or `GROK_MEMORY=1` env var.
-/// Force-disabled via `GROK_MEMORY=0` (overrides TOML and remote settings).
+/// `.grok/config.toml`. Enabled by default. Force-disabled via
+/// `--no-memory`, `GROK_MEMORY=0`/`false`, or `[memory] enabled = false`.
 ///
 /// All sub-configs are pre-populated with production-ready defaults so that
 /// later PRs (indexing, search, flush, pruning) can read them without any
@@ -61,10 +60,11 @@ pub struct MemoryConfig {
 impl MemoryConfig {
     /// Resolve the final memory config from all sources (in priority order):
     /// 1. CLI flag `--no-memory` (absolute highest — always disables, overrides all)
-    /// 2. CLI flag `--experimental-memory` (enables, but overridden by --no-memory)
+    /// 2. CLI flag `--experimental-memory` enables (legacy; overrides env disable)
     /// 3. `GROK_MEMORY` env var: `1`/`true` enables, `0`/`false` force-disables
-    /// 4. Config file `[memory]` / `[compaction]` sections
+    /// 4. Config file `[memory] enabled` / `[compaction]` sections
     /// 5. Remote settings from `/v1/settings`
+    /// 6. Default: enabled
     ///
     /// Remote settings only override fields when the corresponding local
     /// config section is absent. Section-level granularity: if `[memory.search]`
@@ -194,6 +194,12 @@ impl MemoryConfig {
                 }
             }
         }
+        // Default on. Explicit `[memory] enabled = …` wins over the default;
+        // other `[memory.*]` subsections alone do not imply enabled=false.
+        let has_enabled_key = config
+            .get("memory")
+            .and_then(|m| m.get("enabled"))
+            .is_some();
         let resolved = crate::agent::config::resolve_enabled(
             if experimental_memory {
                 Some(true)
@@ -202,9 +208,9 @@ impl MemoryConfig {
             },
             "GROK_MEMORY",
             result.enabled,
-            config.get("memory").is_some(),
+            has_enabled_key,
             remote.and_then(|r| r.memory_enabled),
-            false,
+            true,
         );
         result.enabled = resolved.value;
         if no_memory {
@@ -733,6 +739,11 @@ pub struct ToolsConfig {
     /// (currently just `video_gen`). Intended for ZDR-bound teams via
     /// `~/.grok/managed_config.toml`. Defaults to `false`.
     pub disable_zdr_incompatible_tools: bool,
+    /// Glob patterns that no tool may read, search, list, or edit.
+    /// Defaults to common build/dependency caches. Override via
+    /// `[tools] blocked_paths = [...]` or `GROK_BLOCKED_PATHS` (comma/colon
+    /// separated). An explicit empty list disables the defaults.
+    pub blocked_paths: Vec<String>,
     /// Optional S3 bucket config for ZDR video output. When present (and
     /// valid), video tools presign an upload URL and pass it to the API so
     /// the generated video lands in a team-owned bucket instead of being
@@ -743,17 +754,31 @@ pub struct ToolsConfig {
 }
 impl ToolsConfig {
     /// Resolve the final tools config, in priority order:
-    /// 1. Env vars `GROK_RESPECT_GITIGNORE` and
-    ///    `GROK_DISABLE_ZDR_INCOMPATIBLE_TOOLS` (`0`/`false` off,
-    ///    `1`/`true` on).
+    /// 1. Env vars `GROK_RESPECT_GITIGNORE`,
+    ///    `GROK_DISABLE_ZDR_INCOMPATIBLE_TOOLS`, and `GROK_BLOCKED_PATHS`
+    ///    (`0`/`false` off, `1`/`true` on for bools; comma/colon list for
+    ///    blocked paths).
     /// 2. `[tools]` block from the merged effective config.
-    /// 3. Defaults (both `false`).
+    /// 3. Defaults (`respect_gitignore`/`disable_zdr_incompatible_tools` =
+    ///    `false`; `blocked_paths` = common build/cache globs).
     ///
     /// Fields are read individually so a malformed
     /// `[tools.zdr_video_output_s3]` cannot wipe `disable_zdr_incompatible_tools`
     /// (or any other tools flag) via whole-table deserialize failure.
     pub fn resolve(config: &toml::Value) -> Self {
         let tools = config.get("tools");
+        let blocked_paths = match tools.and_then(|t| t.get("blocked_paths")) {
+            Some(v) if v.as_array().is_some() => v
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect(),
+            _ => xai_grok_tools::util::DEFAULT_BLOCKED_PATHS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+        };
         let mut result = Self {
             respect_gitignore: tools
                 .and_then(|t| t.get("respect_gitignore"))
@@ -763,6 +788,7 @@ impl ToolsConfig {
                 .and_then(|t| t.get("disable_zdr_incompatible_tools"))
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
+            blocked_paths,
             zdr_video_output_s3: tools
                 .and_then(|t| t.get("zdr_video_output_s3"))
                 .and_then(|s3_val| match s3_val
@@ -804,6 +830,9 @@ impl ToolsConfig {
                 result.disable_zdr_incompatible_tools = true;
             }
             _ => {}
+        }
+        if let Ok(raw) = std::env::var("GROK_BLOCKED_PATHS") {
+            result.blocked_paths = xai_grok_tools::util::parse_blocked_paths_env(&raw);
         }
         result
     }

@@ -272,6 +272,24 @@ impl xai_tool_runtime::Tool for SearchTool {
         let limit = input.limit.unwrap_or(5) as usize;
         let snapshot = tool_index.search_snapshot(&input.query, limit);
 
+        // Promote any deferred MCP tools discovered by this search into the
+        // model-visible tool list so the model can call them via `use_tool`.
+        if let Ok(resources) = crate::types::tool_metadata::shared_resources(&ctx) {
+            let guard = resources.lock().await;
+            if let Some(callback) = guard.get::<crate::types::resources::DeferredToolCallback>() {
+                let names: Vec<String> = snapshot
+                    .results
+                    .iter()
+                    .map(|r| r.tool_name.clone())
+                    .collect();
+                let cb = callback.clone();
+                drop(guard);
+                for name in names {
+                    cb.0(&name).await;
+                }
+            }
+        }
+
         // Event: search_tool.search (telemetry — before grouping)
         let all_results_json: Vec<serde_json::Value> = snapshot
             .results

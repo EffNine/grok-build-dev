@@ -123,6 +123,27 @@ pub(super) async fn refresh_mcp_snapshot_and_schedule_reminder_with(
         }
     }
 
+    // Include deferred-tool metadata in the snapshot so `search_tool` can
+    // discover them without every MCP tool being registered in the model's
+    // tool list upfront.
+    {
+        let mcp_state = mcp_state.lock().await;
+        for (qualified_name, reg) in mcp_state.deferred_tool_registrations() {
+            if !seen_tools.insert(qualified_name.clone()) {
+                continue;
+            }
+            let (server, tool) = split_qualified_name(qualified_name);
+            mcp_tools.push(ToolMetadata {
+                qualified_name: qualified_name.clone(),
+                server_name: server.to_string(),
+                tool_name: tool.to_string(),
+                description: reg.description.clone(),
+                parameters: extract_parameter_names(&reg.input_schema),
+                input_schema: reg.input_schema.clone(),
+            });
+        }
+    }
+
     let servers_with_tools: std::collections::HashSet<&str> =
         mcp_tools.iter().map(|t| t.server_name.as_str()).collect();
 

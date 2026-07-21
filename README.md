@@ -1,65 +1,55 @@
-<div align="center">
+# Grok Build (`grok`) — Free/BYOK Fork
 
-<h1>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://media.x.ai/v1/website/spacexai-symbol-white-transparent-0c31957f.png">
-    <source media="(prefers-color-scheme: light)" srcset="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png">
-    <img alt="SpaceXAI logo" src="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png" width="96">
-  </picture>
-  <br>
-  Grok Build (<code>grok</code>)
-</h1>
+A terminal-based AI coding agent. Bring your own API key and model endpoint — no subscription required.
 
-**Grok Build** is SpaceXAI's terminal-based AI coding agent. It runs as a
-full-screen TUI that understands your codebase, edits files, executes shell
-commands, searches the web, and manages long-running tasks — interactively,
-headlessly for scripting/CI, or embedded in editors via the Agent Client
-Protocol (ACP).
-
-[Installing the released binary](#installing-the-released-binary) ·
-[Building from source](#building-from-source) ·
-[Documentation](#documentation) ·
-[Repository layout](#repository-layout) ·
-[Development](#development) ·
-[Contributing](#contributing) ·
-[License](#license)
-
-![Grok Build TUI](https://media.x.ai/v1/website/universe-tui-screenshot-6f7a0837.png)
-
-**Learn more about Grok Build at [x.ai/cli](https://x.ai/cli)**
-
-This repository contains the Rust source for the `grok` CLI/TUI and its agent
-runtime. It is synced periodically from the SpaceXAI monorepo.
-
-A small `SOURCE_REV` file at the root records the full monorepo commit SHA
-for the version of the code present in this tree.
-
-</div>
+This fork removes all SpaceXAI/xAI service integration (OAuth login, telemetry, subscription checks, managed configs, and SuperGrok upsells). The only supported auth method is a provider API key. Grok works with any OpenAI-compatible endpoint.
 
 ---
 
-## Installing the released binary
+## Quick Start (BYOK)
 
-Prebuilt binaries are published for macOS, Linux, and Windows:
+Export your provider key and base URL, then launch the TUI:
 
 ```sh
-curl -fsSL https://x.ai/cli/install.sh | bash   # macOS / Linux / Git Bash
-irm https://x.ai/cli/install.ps1 | iex          # Windows PowerShell
-grok --version
+export XAI_API_KEY="sk-..."
+export GROK_MODELS_BASE_URL="https://api.openai.com/v1"
+cargo run -p xai-grok-pager-bin
 ```
 
-See the [changelog](https://x.ai/build/changelog) for the latest fixes,
-features, and improvements in each release.
+Or launch the TUI first and configure it inline with the `/byok` slash command:
+
+```text
+/byok sk-... https://api.openai.com/v1
+```
+
+Grok will fetch the model catalog from `<base_url>/models` and list all models available under your key.
+
+### Per-model configuration
+
+Add a `[model.<id>]` block to `~/.grok/config.toml` for models that need their own endpoint or key:
+
+```toml
+[model.claude-sonnet-4]
+model = "claude-sonnet-4-20250514"
+base_url = "https://api.anthropic.com/v1"
+api_key = "sk-ant-..."
+name = "Claude Sonnet 4"
+description = "Anthropic Claude Sonnet 4"
+context_window = 200000
+```
+
+### Legacy environment variable
+
+The old `GROK_CODE_XAI_API_KEY` name is still accepted as a fallback.
+
+---
 
 ## Building from source
 
 Requirements:
 
-- **Rust** — the toolchain is pinned by [`rust-toolchain.toml`](rust-toolchain.toml);
-  `rustup` installs it automatically on first build.
-- **[DotSlash](https://dotslash-cli.com)** — required so hermetic tools under
-  [`bin/`](bin/) (notably [`bin/protoc`](bin/protoc)) can download and run.
-  Install it and ensure `dotslash` is on your `PATH` **before** building:
+- **Rust** — the toolchain is pinned by [`rust-toolchain.toml`](rust-toolchain.toml); `rustup` installs it automatically on first build.
+- **[DotSlash](https://dotslash-cli.com)** — required so hermetic tools under [`bin/`](bin/) (notably [`bin/protoc`](bin/protoc)) can download and run. Install it and ensure `dotslash` is on your `PATH` before building:
 
   ```sh
   cargo install dotslash
@@ -67,10 +57,8 @@ Requirements:
   /usr/bin/env dotslash --help   # sanity check
   ```
 
-- **protoc** — proto codegen resolves [`bin/protoc`](bin/protoc) via DotSlash,
-  or falls back to a `protoc` on `PATH` / `$PROTOC`.
-- macOS and Linux are supported build hosts; Windows builds are best-effort
-  and not currently tested from this tree.
+- **protoc** — proto codegen resolves [`bin/protoc`](bin/protoc) via DotSlash, or falls back to a `protoc` on `PATH` / `$PROTOC`.
+- macOS and Linux are supported build hosts; Windows builds are best-effort and not currently tested from this tree.
 
 ```sh
 cargo run -p xai-grok-pager-bin              # build + launch the TUI
@@ -78,19 +66,9 @@ cargo build -p xai-grok-pager-bin --release  # release binary: target/release/xa
 cargo check -p xai-grok-pager-bin            # fast validation
 ```
 
-The binary artifact is named `xai-grok-pager`; official installs ship it as
-`grok`. On first launch it opens your browser to authenticate — see the
-[authentication guide](crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md).
+The binary artifact is named `xai-grok-pager`; rename or symlink it to `grok` if you want to call it that way.
 
-## Documentation
-
-Full online documentation is available at
-[docs.x.ai/build/overview](https://docs.x.ai/build/overview).
-
-The user guide ships with the pager crate:
-[`crates/codegen/xai-grok-pager/docs/user-guide/`](crates/codegen/xai-grok-pager/docs/user-guide/)
-— getting started, keyboard shortcuts, slash commands, configuration, theming,
-MCP servers, skills, plugins, hooks, headless mode, sandboxing, and more.
+---
 
 ## Repository layout
 
@@ -106,9 +84,9 @@ MCP servers, skills, plugins, hooks, headless mode, sandboxing, and more.
 | `third_party/` | Vendored upstream source (Mermaid diagram stack) — see below |
 
 > [!IMPORTANT]
-> The root `Cargo.toml` (workspace members, dependency versions, lints,
-> profiles) is **generated** — treat it as read-only. Prefer editing per-crate
-> `Cargo.toml` files.
+> The root `Cargo.toml` (workspace members, dependency versions, lints, profiles) is **generated** — treat it as read-only. Prefer editing per-crate `Cargo.toml` files.
+
+---
 
 ## Development
 
@@ -119,22 +97,14 @@ cargo clippy -p <crate>       # lint config: clippy.toml at the repo root
 cargo fmt --all               # rustfmt.toml at the repo root
 ```
 
-## Contributing
-
-> [!NOTE]
-> External contributions are not accepted. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+---
 
 ## License
 
-First-party code in this repository is licensed under the **Apache License,
-Version 2.0** — see [`LICENSE`](LICENSE).
+First-party code in this repository is licensed under the **Apache License, Version 2.0** — see [`LICENSE`](LICENSE).
 
 Third-party and vendored code remains under its original licenses. See:
 
-- [`THIRD-PARTY-NOTICES`](THIRD-PARTY-NOTICES) — crates.io / git dependencies,
-  bundled UI themes, and **in-tree source ports** (including openai/codex and
-  sst/opencode tool implementations)
-- [`crates/codegen/xai-grok-tools/THIRD_PARTY_NOTICES.md`](crates/codegen/xai-grok-tools/THIRD_PARTY_NOTICES.md)
-  — crate-local notice for the codex and opencode ports (license texts +
-  Apache §4(b) change notice)
+- [`THIRD-PARTY-NOTICES`](THIRD-PARTY-NOTICES) — crates.io / git dependencies, bundled UI themes, and in-tree source ports (including openai/codex and sst/opencode tool implementations)
+- [`crates/codegen/xai-grok-tools/THIRD_PARTY_NOTICES.md`](crates/codegen/xai-grok-tools/THIRD_PARTY_NOTICES.md) — crate-local notice for the codex and opencode ports (license texts + Apache §4(b) change notice)
 - [`third_party/NOTICE`](third_party/NOTICE) — vendored Mermaid-stack index

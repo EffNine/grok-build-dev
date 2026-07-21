@@ -153,6 +153,10 @@ pub struct CompactionConfig {
     pub prefire: PrefireState,
     /// Sticky once a forked session releases its inherited prefix under compaction pressure (see `run_compact_inner`), so it stops re-pinning it.
     pub prefix_released: AtomicBool,
+    /// Optional cumulative output-token budget for this session (`/budget`).
+    /// `RefCell` because `SessionActor` is `!Send` and budget is mutated after
+    /// each turn (record + nudge) without needing `&mut self` on the actor.
+    pub token_budget: RefCell<xai_token_estimation::TokenBudget>,
 }
 
 #[cfg(test)]

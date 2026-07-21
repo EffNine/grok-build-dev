@@ -635,7 +635,7 @@ pub struct RuntimeResolutionContext<'a> {
     pub cli_subagents: Option<bool>,
     pub cli_web_search_model: Option<&'a str>,
     pub cli_session_summary_model: Option<&'a str>,
-    /// CLI `--experimental-memory` flag. Enables cross-session memory.
+    /// CLI `--experimental-memory` flag. Kept for CLI compatibility; ignored in this fork.
     pub cli_experimental_memory: bool,
     /// CLI `--no-memory` flag. Overrides all other memory settings.
     pub cli_no_memory: bool,
@@ -1518,6 +1518,10 @@ pub struct Config {
     /// Resolved by [`crate::config::ToolsConfig::resolve`].
     #[serde(skip)]
     pub respect_gitignore: bool,
+    /// Glob patterns blocked from Read / Grep / ListDir / Edit / Bash.
+    /// Resolved by [`crate::config::ToolsConfig::resolve`].
+    #[serde(skip)]
+    pub blocked_paths: Vec<String>,
     /// When `true`, `MvpAgent::prepare_video_gen_config` returns
     /// `VideoGenConfig::Disabled`, dropping `video_gen` (and any
     /// future ZDR-incompatible tools) from the model's tool set.
@@ -1796,6 +1800,10 @@ impl Default for Config {
             todo_gate: false,
             laziness_debug_log: None,
             respect_gitignore: false,
+            blocked_paths: xai_grok_tools::util::DEFAULT_BLOCKED_PATHS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
             disable_zdr_incompatible_tools: false,
             zdr_video_output_s3: None,
             path_not_found_hints: false,
@@ -2074,6 +2082,7 @@ impl Config {
             Some(pinned) => pinned,
             None => tools.respect_gitignore,
         };
+        self.blocked_paths = tools.blocked_paths;
         self.disable_zdr_incompatible_tools = tools.disable_zdr_incompatible_tools;
         self.zdr_video_output_s3 = tools.zdr_video_output_s3;
         let mcps = crate::config::ManagedMcpsConfig::resolve(
