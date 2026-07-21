@@ -253,32 +253,23 @@ pub(super) fn dispatch_show_context_info(app: &mut AppView) -> Vec<Effect> {
     }]
 }
 
-/// Show credit usage: fetch billing data and display inline.
+/// Show local usage info.
 ///
-/// When the remote settings `grok_build_usage_redirect_url` flag is set (delivered via
-/// RemoteSettings, targeted at personal-team users), skip the backend fetch and
-/// just point the user at that URL instead. This is a kill switch for the
-/// personal-team billing path while it is unreliable.
+/// Free/BYOK fork: there is no xAI billing/credits system to query, so we
+/// display a short explanatory message instead of fetching remote billing data
+/// or opening a subscription management page.
 pub(super) fn dispatch_show_usage(app: &mut AppView) -> Vec<Effect> {
     let ActiveView::Agent(id) = app.active_view else {
         return vec![];
     };
-    if let Some(url) = app.usage_billing_redirect_url.clone() {
-        if let Some(agent) = app.agents.get_mut(&id) {
-            agent.scrollback.push_block(RenderBlock::System(
-                crate::scrollback::blocks::SystemMessageBlock::new(format!(
-                    "Please check your usage on {url}"
-                )),
-            ));
-        }
-        return vec![];
+    if let Some(agent) = app.agents.get_mut(&id) {
+        agent.scrollback.push_block(RenderBlock::System(
+            crate::scrollback::blocks::SystemMessageBlock::new(
+                "Usage tracking is local in BYOK mode. No xAI billing/credits data is available.".to_string(),
+            ),
+        ));
     }
-    // Non-silent fetch: the effect also pulls the auto top-up rule so the
-    // summary can render usage, prepaid credits, and auto top-up together.
-    vec![Effect::FetchBilling {
-        agent_id: id,
-        silent: false,
-    }]
+    vec![]
 }
 
 /// Commit a one-line "update available" notice into the active agent's
