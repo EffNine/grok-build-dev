@@ -643,6 +643,46 @@ pub(super) async fn send_logout(tx: &AcpAgentTx) {
         tracing::warn!(error = % e, "logout failed");
     }
 }
+
+/// Configure BYOK: store global API key + models_base_url, fetch model catalog.
+pub(super) async fn send_byok_configure(
+    tx: &AcpAgentTx,
+    key: &str,
+    base_url: &str,
+    models_list_url: Option<&str>,
+) -> anyhow::Result<usize> {
+    let mut body = serde_json::json!({
+        "key": key,
+        "base_url": base_url,
+    });
+    if let Some(list_url) = models_list_url {
+        body["models_list_url"] = serde_json::json!(list_url);
+    }
+    let req = acp::ExtRequest::new(
+        "x.ai/byok/configure",
+        serde_json::value::to_raw_value(&body)
+            .expect("serialize byok/configure params")
+            .into(),
+    );
+    let resp = acp_send(req, tx).await?;
+    let envelope: ExtMethodResult<serde_json::Value> =
+        serde_json::from_str(resp.0.get())
+            .map_err(|e| anyhow::anyhow!("parse byok response: {e}"))?;
+    let data = envelope.result.ok_or_else(|| {
+        anyhow::anyhow!(
+            "{}",
+            envelope
+                .error
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "BYOK configure failed".into())
+        )
+    })?;
+    let model_count = data
+        .get("model_count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
+    Ok(model_count)
+}
 /// Best-effort `x.ai/auth/cancel`: stops the shell's device/loopback wait so a
 /// later login is single-flight. Errors are ignored — UI already left
 /// `Authenticating`. `request_seq` scopes the cancel to the abandoned attempt.

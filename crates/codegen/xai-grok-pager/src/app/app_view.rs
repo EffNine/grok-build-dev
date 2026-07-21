@@ -550,6 +550,7 @@ fn parse_esc_ttl(raw: Option<String>) -> Duration {
 /// - `voice` — voice dictation entry point (the Ctrl+Space / F8 keybinding is
 ///   gated separately in [`crate::app::dispatch::voice`], since it bypasses the
 ///   slash registry)
+#[allow(dead_code)] // Free/BYOK fork never applies tier deny lists.
 pub(crate) const TIER_RESTRICTED_COMMANDS: &[&str] =
     &["usage", "imagine", "imagine-video", "voice"];
 /// Whether a subscription-tier display name is a tier with restricted
@@ -1145,7 +1146,8 @@ impl AppView {
     }
     /// User is not gated (no gate from remote settings or subscription fallback).
     pub fn has_access(&self) -> bool {
-        self.gate.is_none()
+        // Free/BYOK fork: never show subscription paywall.
+        true
     }
     /// True when the user should not see the prompt (gate, subscription, or ZDR).
     pub fn is_access_blocked(&self) -> bool {
@@ -1495,17 +1497,8 @@ impl AppView {
     /// `x.ai/settings/update` handler when the subscription tier changes, so
     /// a mid-session upgrade lifts the restrictions without a restart.
     pub fn apply_tier_restrictions(&mut self) {
-        let restricted = self.team_name.is_none()
-            && !self.is_api_key_auth
-            && is_restricted_tier(self.subscription_tier.as_deref());
-        let names: Vec<String> = if restricted {
-            TIER_RESTRICTED_COMMANDS
-                .iter()
-                .map(|n| (*n).to_string())
-                .collect()
-        } else {
-            Vec::new()
-        };
+        // Free/BYOK fork: never deny slash commands by subscription tier.
+        let names: Vec<String> = Vec::new();
         for agent in self.agents.values_mut() {
             agent.set_restricted_commands(&names);
         }

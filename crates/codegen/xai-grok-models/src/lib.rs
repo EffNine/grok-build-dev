@@ -1,6 +1,9 @@
 //! Default model IDs loaded from `default_models.json` at runtime.
 //! Edit that JSON file to change them.
 //!
+//! Free/BYOK fork: the baked-in catalog is empty. Models come from the
+//! user's `models_base_url` `/models` fetch (or `[model.*]` overrides).
+//!
 //! At runtime each model is resolved via:
 //!   CLI flag > ENV var > config.toml > remote settings > these defaults
 
@@ -32,13 +35,15 @@ static DEFAULTS: LazyLock<DefaultModels> = LazyLock::new(|| {
     let defaults: DefaultModels = serde_json::from_str(DEFAULT_MODELS_JSON)
         .expect("default_models.json: invalid JSON or missing 'default' field");
 
-    // Baked-in JSON — a mismatch here is a developer error, not a runtime condition.
-    let model_ids: Vec<&str> = defaults.models.iter().map(|m| m.model.as_str()).collect();
-    assert!(
-        model_ids.contains(&defaults.default.as_str()),
-        "default_models.json: 'default' is '{}' but 'models' array only has {model_ids:?}",
-        defaults.default,
-    );
+    // Free/BYOK fork may ship an empty catalog (configure via /byok).
+    if !defaults.models.is_empty() {
+        let model_ids: Vec<&str> = defaults.models.iter().map(|m| m.model.as_str()).collect();
+        assert!(
+            model_ids.contains(&defaults.default.as_str()),
+            "default_models.json: 'default' is '{}' but 'models' array only has {model_ids:?}",
+            defaults.default,
+        );
+    }
 
     defaults
 });

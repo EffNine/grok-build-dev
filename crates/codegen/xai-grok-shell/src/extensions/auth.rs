@@ -17,6 +17,7 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
         "x.ai/auth/getBearerToken" => handle_get_bearer_token(agent).await,
         "x.ai/getApiKey" => handle_get_api_key(),
         "x.ai/setApiKey" => handle_set_api_key(args),
+        "x.ai/byok/configure" => handle_byok_configure(agent, args).await,
         "x.ai/auth/submit_code" => handle_submit_code(agent, args),
         "x.ai/auth/get_url" => handle_get_url(agent).await,
         "x.ai/auth/cancel" => handle_cancel(agent, args),
@@ -96,6 +97,107 @@ fn handle_set_api_key(args: &acp::ExtRequest) -> ExtResult {
         .map_err(|e| acp::Error::internal_error().data(e.to_string()))
 }
 
+/// Persist a global API key + `models_base_url`, then fetch the provider model catalog.
+async fn handle_byok_configure(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
+    #[derive(Deserialize)]
+    struct ByokParams {
+        key: String,
+        base_url: String,
+        #[serde(default)]
+        models_list_url: Option<String>,
+    }
+    let params: ByokParams = parse_params(args)?;
+    let key = params.key.trim();
+    let base_url = params.base_url.trim().trim_end_matches('/');
+    if key.is_empty() || base_url.is_empty() {
+        return Err(acp::Error::invalid_params()
+            .data("key and base_url are required (e.g. /byok <api_key> <base_url>)"));
+    }
+
+    let grok_home = crate::util::grok_home::grok_home();
+    crate::auth::store_api_key(&grok_home, key)
+        .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
+    // SAFETY: ext_method is single-threaded per agent
+    unsafe {
+        std::env::set_var("XAI_API_KEY", key);
+        std::env::set_var("GROK_MODELS_BASE_URL", base_url);
+        if let Some(ref list_url) = params.models_list_url {
+            let list_url = list_url.trim();
+            if !list_url.is_empty() {
+                std::env::set_var("GROK_MODELS_LIST_URL", list_url);
+            }
+        }
+    }
+
+    persist_models_base_url(base_url, params.models_list_url.as_deref())
+        .map_err(|e| acp::Error::internal_error().data(e))?;
+
+    {
+        let mut sampling = agent.sampling_config.borrow_mut();
+        sampling.api_key = Some(key.to_string());
+    }
+    {
+        let mut cfg = agent.cfg.borrow_mut();
+        cfg.endpoints.models_base_url = Some(base_url.to_string());
+        if let Some(ref list_url) = params.models_list_url {
+            let list_url = list_url.trim();
+            if !list_url.is_empty() {
+                cfg.endpoints.models_list_url = Some(list_url.to_string());
+            }
+        }
+    }
+
+    agent.set_auth_method(acp::AuthMethodId::new(
+        crate::agent::auth_method::XAI_API_KEY_METHOD_ID,
+    ));
+    agent.sync_process_static_api_key(None);
+
+    let cfg_snapshot = agent.cfg.borrow().clone();
+    agent.models_manager.apply_config(cfg_snapshot);
+    agent.models_manager.on_auth_changed().await;
+
+    let model_count = agent.models_manager.models().len();
+    ExtMethodResult::success(serde_json::json!({
+        "ok": true,
+        "base_url": base_url,
+        "model_count": model_count,
+    }))
+    .to_ext_response()
+    .map_err(|e| acp::Error::internal_error().data(e.to_string()))
+}
+
+fn persist_models_base_url(
+    base_url: &str,
+    models_list_url: Option<&str>,
+) -> Result<(), String> {
+    let config_path = crate::util::grok_home::grok_home().join("config.toml");
+    if let Some(parent) = config_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let existing = crate::util::config::read_to_string_or_empty(&config_path)
+        .map_err(|e| format!("read config.toml: {e}"))?;
+    let mut doc = if existing.trim().is_empty() {
+        toml_edit::DocumentMut::new()
+    } else {
+        existing
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("parse config.toml: {e}"))?
+    };
+    if !doc.contains_key("endpoints") {
+        doc["endpoints"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    let endpoints = doc["endpoints"]
+        .as_table_mut()
+        .ok_or_else(|| "[endpoints] is not a table".to_string())?;
+    endpoints["models_base_url"] = toml_edit::value(base_url);
+    if let Some(list_url) = models_list_url.map(str::trim).filter(|s| !s.is_empty()) {
+        endpoints["models_list_url"] = toml_edit::value(list_url);
+    }
+    crate::util::config::atomic_write_string(&config_path, &doc.to_string())
+        .map_err(|e| format!("write config.toml: {e}"))?;
+    Ok(())
+}
+
 /// Handle auth code submission from TUI.
 fn handle_submit_code(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
     #[derive(Deserialize)]
@@ -151,6 +253,12 @@ async fn handle_logout(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
 
     let result = crate::auth::perform_logout(&agent.auth_manager, params.scope.as_deref())
         .map_err(|e| acp::Error::internal_error().data(format!("failed to logout: {e}")))?;
+    // Free/BYOK fork: always clear the stored API key on logout.
+    let grok_home = crate::util::grok_home::grok_home();
+    let _ = crate::auth::clear_api_key(&grok_home);
+    unsafe { std::env::remove_var("XAI_API_KEY") };
+    agent.sampling_config.borrow_mut().api_key = None;
+
     // `auth.lifecycle` (not `auth`) avoids colliding with the pre-existing
     // per-request `AuthManager::auth()` `#[instrument]` span.
     tracing::info_span!("auth.lifecycle", action = "logout", success = true).in_scope(|| {});
@@ -161,7 +269,7 @@ async fn handle_logout(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
         "ok": true,
         "was_logged_in": result.was_logged_in,
         "email": result.email,
-        "api_key_still_set": result.api_key_still_set,
+        "api_key_still_set": false,
     }))
 }
 

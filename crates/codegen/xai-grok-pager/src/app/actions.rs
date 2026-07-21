@@ -609,6 +609,12 @@ pub enum Action {
     SwitchAccount,
     /// User pressed login on the welcome screen.
     Login,
+    /// Configure BYOK: global API key + models base URL (fetches all models).
+    ConfigureByok {
+        key: String,
+        base_url: String,
+        models_list_url: Option<String>,
+    },
     /// Cancel an in-progress login that was started from inside a session
     /// (`/login` or a 401 re-auth prompt) and return to the previous view.
     /// Distinct from `Quit`: abandoning a mid-session re-auth must not exit
@@ -1888,6 +1894,12 @@ pub enum Effect {
     },
     /// Log out via `x.ai/auth/logout` (shell clears auth.json + in-memory state).
     Logout,
+    /// Configure BYOK via `x.ai/byok/configure` (key + base URL, fetch models).
+    ConfigureByok {
+        key: String,
+        base_url: String,
+        models_list_url: Option<String>,
+    },
     /// Cancel an in-flight interactive auth on the shell (`x.ai/auth/cancel`).
     /// Used when the user abandons mid-session `/login` so the device-code
     /// poll stops instead of running until the code expires. `request_seq`
@@ -2582,6 +2594,12 @@ pub enum TaskResult {
     },
     /// Shell acknowledged logout (auth cleared).
     LogoutComplete,
+    /// BYOK configure finished (or failed).
+    ByokConfigureComplete {
+        ok: bool,
+        message: String,
+        model_count: Option<usize>,
+    },
     /// Best-effort `x.ai/auth/cancel` finished (no UI update; state already left Authenticating).
     AuthCancelComplete,
     /// Shell responded to `x.ai/auth/check_subscription`. `verify` echoes
