@@ -16,7 +16,7 @@ use crate::types::resources::Params;
 #[allow(unused_imports)]
 use crate::types::resources::{
     Cwd, DisplayCwd, FileSystem, GitignoreFilter, PathNotFoundHints, RespectGitignore,
-    SharedResources, TruncationCfg, display_cwd_or_cwd, resolve_model_path,
+    SharedResources, TruncationCfg, blocked_path_error, display_cwd_or_cwd, resolve_model_path,
 };
 use crate::types::template_renderer::TemplateRenderer;
 use crate::types::tool::{ToolKind, ToolNamespace};
@@ -330,18 +330,26 @@ pub(crate) async fn run_read_file(
         .and_then(|f| f.to_str())
         .is_some_and(|name| name == "SKILL.md");
     let skip_gitignore = is_legacy && versions::legacy_0_4_10::allows_gitignored_reads();
-    if !skip_gitignore {
+    {
         let res = resources.lock().await;
-        let respect_gitignore = res.get::<RespectGitignore>().is_some_and(|r| r.0);
-        if respect_gitignore
-            && let Some(filter) = res.get::<GitignoreFilter>()
-            && filter.is_ignored(&path)
+        if !skip_gitignore {
+            let respect_gitignore = res.get::<RespectGitignore>().is_some_and(|r| r.0);
+            if respect_gitignore
+                && let Some(filter) = res.get::<GitignoreFilter>()
+                && filter.is_ignored(&path)
+            {
+                let display_dcwd = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
+                return Ok(ReadFileOutput::FileReadError(format!(
+                    "Error: {} is ignored by .gitignore and cannot be read.",
+                    display_dcwd.join(&input.path).display()
+                )));
+            }
+        }
+        let display_dcwd = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
+        if let Some(msg) =
+            blocked_path_error(&res, &path, &cwd, &display_dcwd.join(&input.path))
         {
-            let display_dcwd = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
-            return Ok(ReadFileOutput::FileReadError(format!(
-                "Error: {} is ignored by .gitignore and cannot be read.",
-                display_dcwd.join(&input.path).display()
-            )));
+            return Ok(ReadFileOutput::FileReadError(msg));
         }
     }
     let file_bytes = match fs.read_file(&path).await {

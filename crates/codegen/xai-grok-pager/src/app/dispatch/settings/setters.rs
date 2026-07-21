@@ -888,6 +888,45 @@ pub(in crate::app::dispatch) fn set_timestamps(app: &mut AppView, new: bool) -> 
     }]
 }
 
+pub(in crate::app::dispatch) fn toggle_diff_layout(app: &mut AppView) -> Vec<Effect> {
+    use crate::scrollback::blocks::DiffLayout;
+    let current = DiffLayout::parse(&app.appearance.scrollback.blocks.edit.diff_layout)
+        .unwrap_or(DiffLayout::Unified);
+    set_diff_layout(app, current.toggle().as_str())
+}
+
+pub(in crate::app::dispatch) fn set_diff_layout(app: &mut AppView, new: &str) -> Vec<Effect> {
+    use crate::scrollback::blocks::DiffLayout;
+    let Some(parsed) = DiffLayout::parse(new) else {
+        return vec![];
+    };
+    let canonical = parsed.as_str().to_string();
+    let prev = app.appearance.scrollback.blocks.edit.diff_layout.clone();
+    if prev == canonical {
+        return vec![];
+    }
+    let mut config = app.appearance.clone();
+    config.scrollback.blocks.edit.diff_layout = canonical.clone();
+    app.set_appearance(config);
+    crate::appearance::cache::set_diff_layout(&canonical);
+    tracing::info!(
+        target: "settings",
+        key = "diff_layout",
+        value = %canonical,
+        "setting changed"
+    );
+    app.show_toast(&format!(
+        "Diff layout: {}",
+        match parsed {
+            DiffLayout::Unified => "unified",
+            DiffLayout::SideBySide => "side-by-side",
+        }
+    ));
+    // Appearance is in-memory for this session; pager.toml users can set
+    // `[scrollback.blocks.edit] diff_layout = "side_by_side"` for persistence.
+    vec![]
+}
+
 /// State-only mutation for `show_timeline`. Mirrors `set_timestamps_inner`.
 pub(super) fn set_timeline_inner(app: &mut AppView, new: bool) {
     app.current_ui.show_timeline = Some(new);

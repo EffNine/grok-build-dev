@@ -209,6 +209,45 @@ impl SessionActor {
                     .set_display_cwd(std::path::PathBuf::from(display_cwd))
                     .await;
             }
+            {
+                let mcp_state = std::sync::Arc::clone(&self.mcp_state);
+                let bridge_for_cb = bridge.clone();
+                let callback = xai_grok_tools::types::resources::DeferredToolCallback::new(
+                    move |qualified_name: &str| {
+                        let mcp_state = std::sync::Arc::clone(&mcp_state);
+                        let bridge = bridge_for_cb.clone();
+                        let name = qualified_name.to_string();
+                        Box::pin(async move {
+                            let reg = {
+                                let mut state = mcp_state.lock().await;
+                                state.take_deferred_registration(&name)
+                            };
+                            if let Some(reg) = reg {
+                                if let Err(e) = bridge
+                                    .register_mcp_tools(reg.name, reg.tool, Some(reg.input_schema))
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        tool = %name,
+                                        error = %e,
+                                        "Failed to register deferred MCP tool"
+                                    );
+                                    false
+                                } else {
+                                    tracing::debug!(
+                                        tool = %name,
+                                        "Deferred MCP tool registered on demand"
+                                    );
+                                    true
+                                }
+                            } else {
+                                false
+                            }
+                        })
+                    },
+                );
+                bridge.update_resource(callback).await;
+            }
             bridge
                 .update_resource(
                     xai_grok_tools::implementations::grok_build::update_goal::GoalUpdateHandle(

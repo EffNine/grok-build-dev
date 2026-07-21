@@ -80,6 +80,31 @@ impl SessionActor {
                 ok_end_turn(0, None)
             }
             BuiltinAction::ContextInfo => ok_end_turn(0, None),
+            BuiltinAction::Budget { amount } => {
+                let msg = match amount {
+                    None => self.compaction.token_budget.borrow().status_message(),
+                    Some(raw) => match xai_token_estimation::TokenBudget::parse(&raw) {
+                        Some(total) => {
+                            let mut budget = self.compaction.token_budget.borrow_mut();
+                            // Preserve consumed so mid-session budget changes keep the tally.
+                            let consumed = budget.consumed;
+                            *budget = xai_token_estimation::TokenBudget::new(total);
+                            budget.consumed = consumed;
+                            budget.status_message()
+                        }
+                        None => format!(
+                            "Invalid budget amount: {raw}. Examples: 500k, 1m, 100000"
+                        ),
+                    },
+                };
+                self.send_slash_command_output(&msg).await;
+                ok_end_turn(0, None)
+            }
+            BuiltinAction::BudgetClear => {
+                self.compaction.token_budget.borrow_mut().clear();
+                self.send_slash_command_output("Token budget cleared.").await;
+                ok_end_turn(0, None)
+            }
             BuiltinAction::HooksTrust => {
                 let msg = match Self::do_hooks_trust_project(&self.session_info.cwd) {
                     Ok(root) => {

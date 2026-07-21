@@ -15,8 +15,9 @@ mod web_fetch;
 mod web_search;
 
 pub use edit::{
-    DiffLineOutput, DiffRenderConfig, EDIT_HL_MAX_BYTES, EDIT_HL_MAX_LINES, EditHighlightPhase,
-    EditLineStyles, EditToolCallBlock, compute_file_scoped_styles, file_text_within_hl_caps,
+    DiffLayout, DiffLineOutput, DiffRenderConfig, EDIT_HL_MAX_BYTES, EDIT_HL_MAX_LINES,
+    EditHighlightPhase, EditLineStyles, EditToolCallBlock, SIDE_BY_SIDE_MIN_WIDTH,
+    align_side_by_side, compute_file_scoped_styles, file_text_within_hl_caps,
     render_diff_hunk_highlighted, render_diff_hunks_highlighted, render_diff_hunks_with_styles,
 };
 pub use execute::ExecuteToolCallBlock;

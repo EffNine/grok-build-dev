@@ -7,6 +7,7 @@ pub mod always_approve;
 pub mod announcements;
 pub mod auto;
 pub mod btw;
+pub mod budget;
 pub mod byok;
 pub mod cd;
 pub mod compact;
@@ -16,6 +17,7 @@ pub mod context;
 pub mod copy;
 pub mod dashboard;
 pub mod debug;
+pub mod diff_layout;
 pub mod docs;
 pub mod effort;
 pub mod effort_levels;
@@ -89,6 +91,8 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(transcript::TranscriptCommand),
         Arc::new(expand::ExpandCommand),
         Arc::new(context::ContextCommand),
+        Arc::new(budget::BudgetCommand),
+        Arc::new(diff_layout::DiffLayoutCommand),
         Arc::new(screen_mode_switch::ScreenModeSwitchCommand::minimal()),
         Arc::new(screen_mode_switch::ScreenModeSwitchCommand::fullscreen()),
         Arc::new(model::ModelCommand),

@@ -113,6 +113,23 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         resolve: |_args| BuiltinAction::ContextInfo,
     },
     BuiltinCommand {
+        name: "budget",
+        description: "Set or view the session output-token budget",
+        argument_hint: Some("amount (e.g. 500k) | clear | status"),
+        aliases: &[],
+        gate: BuiltinGate::AlwaysOn,
+        resolve: |args| {
+            let trimmed = args.trim();
+            match trimmed.to_lowercase().as_str() {
+                "" | "status" => BuiltinAction::Budget { amount: None },
+                "clear" | "off" | "none" => BuiltinAction::BudgetClear,
+                _ => BuiltinAction::Budget {
+                    amount: Some(trimmed.to_string()),
+                },
+            }
+        },
+    },
+    BuiltinCommand {
         name: "hooks-trust",
         description: "Trust this project for hook execution",
         argument_hint: None,
@@ -614,6 +631,10 @@ pub(super) enum BuiltinAction {
     FlushMemory,
     Dream,
     ContextInfo,
+    Budget {
+        amount: Option<String>,
+    },
+    BudgetClear,
     HooksTrust,
     HooksList,
     HooksAdd {
@@ -669,6 +690,7 @@ impl BuiltinAction {
             BuiltinAction::FlushMemory => "flush",
             BuiltinAction::Dream => "dream",
             BuiltinAction::ContextInfo => "context",
+            BuiltinAction::Budget { .. } | BuiltinAction::BudgetClear => "budget",
             BuiltinAction::HooksTrust => "hooks-trust",
             BuiltinAction::HooksList => "hooks-list",
             BuiltinAction::HooksAdd { .. } => "hooks-add",
@@ -701,6 +723,8 @@ impl BuiltinAction {
             BuiltinAction::FlushMemory => false,
             BuiltinAction::Dream => false,
             BuiltinAction::ContextInfo => false,
+            BuiltinAction::Budget { amount } => amount.is_some(),
+            BuiltinAction::BudgetClear => true,
             BuiltinAction::HooksTrust => false,
             BuiltinAction::HooksList => false,
             BuiltinAction::HooksAdd { .. } => true,
@@ -1514,6 +1538,7 @@ mod tests {
                 "dream",
                 "memory",
                 "context",
+                "budget",
                 "hooks-trust",
                 "hooks-list",
                 "hooks-add",

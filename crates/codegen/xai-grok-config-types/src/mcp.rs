@@ -186,6 +186,11 @@ pub struct McpServerConfig {
     /// ~2× tokens per image. Overridden by `_meta.mcpConfig.<server>.exposeImageBase64`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expose_image_base64: Option<bool>,
+    /// Defer registering this server's tools in the model's tool list until
+    /// they are discovered via `search_tool` or called via `use_tool`. Reduces
+    /// context-window usage for servers with many tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred: Option<bool>,
 }
 
 fn render_setup_template(

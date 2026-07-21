@@ -377,6 +377,10 @@ pub struct McpState {
     /// Stashed registrations for disabled tools so they can be re-enabled
     /// without a full MCP re-init (no need to call `list_tools` again).
     pub disabled_tool_registrations: HashMap<String, McpToolRegistration>,
+    /// Stashed registrations for deferred servers. These tools are not registered
+    /// in the model's tool list at init time; they are loaded on demand when
+    /// `search_tool` or `use_tool` references them.
+    pub deferred_tool_registrations: HashMap<String, McpToolRegistration>,
     event_writer: xai_file_utils::events::EventWriter,
     /// Sender wired by the session actor to its `StatusDispatcher`
     /// task.  When `Some`, the state — and every [`McpClient`] reached
@@ -424,6 +428,7 @@ impl McpState {
             init_failed: HashMap::new(),
             disabled_tools: HashMap::new(),
             disabled_tool_registrations: HashMap::new(),
+            deferred_tool_registrations: HashMap::new(),
             event_writer: xai_file_utils::events::EventWriter::noop(),
             client_event_tx: None,
         }
@@ -548,6 +553,26 @@ impl McpState {
             .is_some_and(|set| set.contains(tool_name))
     }
 
+    /// True if the named tool is currently stashed as a deferred registration.
+    pub fn is_deferred_tool(&self, qualified_name: &str) -> bool {
+        self.deferred_tool_registrations.contains_key(qualified_name)
+    }
+
+    /// Remove and return a deferred registration so it can be registered on demand.
+    pub fn take_deferred_registration(&mut self, qualified_name: &str) -> Option<McpToolRegistration> {
+        self.deferred_tool_registrations.remove(qualified_name)
+    }
+
+    /// Borrow a deferred registration without removing it.
+    pub fn get_deferred_registration(&self, qualified_name: &str) -> Option<&McpToolRegistration> {
+        self.deferred_tool_registrations.get(qualified_name)
+    }
+
+    /// Iterate over all deferred registrations.
+    pub fn deferred_tool_registrations(&self) -> &HashMap<String, McpToolRegistration> {
+        &self.deferred_tool_registrations
+    }
+
     /// Update configs and reset initialization state.
     /// Returns true if the configs actually changed, false if they were identical.
     pub fn update_configs(&mut self, new_configs: Vec<acp::McpServer>) -> bool {
@@ -560,6 +585,7 @@ impl McpState {
         self.owned_clients.clear();
         self.mcp_tool_meta.clear();
         self.disabled_tool_registrations.clear();
+        self.deferred_tool_registrations.clear();
         self.configs = new_configs;
         self.init_progress.cancel();
         self.auth_required.clear();
@@ -1027,6 +1053,10 @@ pub struct McpServerMetaConfig {
     /// Default `false`. See [`format_mcp_image`].
     #[serde(default)]
     pub expose_image_base64: Option<bool>,
+    /// Defer registering this server's tools in the model's tool list until
+    /// they are discovered via `search_tool` or called via `use_tool`.
+    #[serde(default)]
+    pub deferred: Option<bool>,
 }
 
 /// MCP server name → per-server config overrides from `_meta.mcpConfig`.
