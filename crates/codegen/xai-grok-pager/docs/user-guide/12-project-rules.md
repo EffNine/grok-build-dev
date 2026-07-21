@@ -83,6 +83,8 @@ Grok orders the files from the repo root to the current working directory, so fi
 
 ## What to Put in Project Rules
 
+Generate a starter file with `/init` if the repo does not already have one. Then edit it to match your team's real conventions.
+
 ### Coding Conventions
 
 ```markdown

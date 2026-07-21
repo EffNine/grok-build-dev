@@ -199,7 +199,18 @@ The `--json` report includes the full detail for each skill: its `name`, `descri
 
 ## Bundled and Plugin Skills
 
-Grok ships with built-in skills and extracts them to `~/.grok/skills/` on startup -- among them `/create-skill`, `/help`, and `/check-work`. Bundled skills behave like user skills, and a same-named skill in a higher-priority location (local or repo) overrides the bundled copy; `grok inspect` labels the extracted copies `bundled` so they stay distinguishable from skills you authored yourself. (A plugin skill of the same name does not override it; it stays available under its qualified `plugin:name` form.)
+Grok ships with built-in skills and extracts them to `~/.grok/skills/` on startup. Bundled workflow skills include:
+
+| Skill | Slash command | Purpose |
+|-------|---------------|---------|
+| `init` | `/init` | Create a starter root `AGENTS.md` from the repository |
+| `code-review` | `/code-review` | Strict correctness + maintainability review of the current diff / PR |
+| `verify` | `/verify` | Claude-compatible alias for self-verification |
+| `check-work` | `/check-work` | Canonical self-verification workflow (subagent + build/test loop) |
+| `create-skill` | `/create-skill` | Interactive skill authoring |
+| `help` | `/help` | Product / config help |
+
+Bundled skills behave like user skills, and a same-named skill in a higher-priority location (local or repo) overrides the bundled copy; `grok inspect` labels the extracted copies `bundled` so they stay distinguishable from skills you authored yourself. (A plugin skill of the same name does not override it; it stays available under its qualified `plugin:name` form.)
 
 Skills can also come from plugins. When you install a plugin that includes skills, they appear alongside your user and project skills. `grok inspect` labels each plugin-provided skill with its source as `plugin: <name>`.
 

@@ -562,6 +562,17 @@ Any enabled skill with `user-invocable: true` in its SKILL.md frontmatter appear
 /commit fix typo in README
 ```
 
+### Bundled workflow skills
+
+Grok ships these Claude Code–style workflow skills as slash commands:
+
+| Command | Purpose |
+|---------|---------|
+| `/init` | Survey the repo and create a starter root `AGENTS.md` (does not overwrite an existing file) |
+| `/code-review [target]` | Strict review of the current branch diff / PR for correctness and maintainability |
+| `/verify [focus]` | Verify recent work: review the diff, run build/tests, fix until it passes |
+| `/check-work [focus]` | Same verification workflow as `/verify` (canonical name) |
+
 Skills from plugins also appear as slash commands. When multiple skills share the same name (across scopes), use the qualified form:
 
 ```

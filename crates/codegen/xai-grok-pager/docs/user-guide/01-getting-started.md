@@ -243,6 +243,14 @@ Add per-project instructions by creating an `AGENTS.md` file in your repository.
 
 Deeper files take precedence. Grok also reads `CLAUDE.md` files for compatibility.
 
+To generate a starter `AGENTS.md` from the current repository, run:
+
+```
+/init
+```
+
+Grok surveys the README, build manifests, and CI config, then writes a concise root `AGENTS.md` (it will not overwrite an existing one).
+
 ---
 
 ## Where to Go Next
