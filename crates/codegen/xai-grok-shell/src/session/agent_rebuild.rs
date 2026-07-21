@@ -123,6 +123,7 @@ pub(crate) struct AgentRebuildSpec {
     pub subagent_depth: u32,
     pub session_id_str: String,
     pub respect_gitignore: bool,
+    pub blocked_paths: Vec<String>,
     pub path_not_found_hints: bool,
     pub scheduler_background_loops: bool,
     pub mcp_state: Arc<tokio::sync::Mutex<crate::session::mcp_servers::McpState>>,
@@ -218,6 +219,7 @@ impl AgentRebuildSpec {
             subagent_depth,
             session_id_str,
             respect_gitignore,
+            blocked_paths,
             path_not_found_hints,
             scheduler_background_loops,
             mcp_state,
@@ -350,6 +352,12 @@ impl AgentRebuildSpec {
             .await;
         agent
             .tool_bridge()
+            .update_resource(xai_grok_tools::types::resources::BlockedPaths::from_patterns(
+                blocked_paths.iter().cloned(),
+            ))
+            .await;
+        agent
+            .tool_bridge()
             .update_resource(xai_grok_tools::types::resources::SchedulerBackgroundLoops(
                 *scheduler_background_loops,
             ))
@@ -427,6 +435,10 @@ pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
         subagent_depth: 0,
         session_id_str: "test-session".to_string(),
         respect_gitignore: false,
+        blocked_paths: xai_grok_tools::util::DEFAULT_BLOCKED_PATHS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
         scheduler_background_loops: true,
         path_not_found_hints: false,
         mcp_state: Arc::new(tokio::sync::Mutex::new(

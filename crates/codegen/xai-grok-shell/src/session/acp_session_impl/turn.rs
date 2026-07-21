@@ -1695,7 +1695,33 @@ impl SessionActor {
         {
             self.send_feedback_notification(request).await;
         }
+        self.record_token_budget_after_turn(turn_span_totals);
         snapshot
+    }
+
+    /// Update the session `/budget` tally from this turn's output tokens and
+    /// inject a system-reminder nudge when approaching or exceeding the budget.
+    fn record_token_budget_after_turn(&self, turn_span_totals: &TurnSpanTotals) {
+        let output = turn_span_totals.output_tokens.max(0) as u64;
+        if output == 0 && self.compaction.token_budget.borrow().total.is_none() {
+            return;
+        }
+        let nudge_msg = {
+            let mut budget = self.compaction.token_budget.borrow_mut();
+            if budget.total.is_none() {
+                return;
+            }
+            budget.record_output(output);
+            if turn_span_totals.has_tool_call {
+                budget.mark_useful();
+            } else {
+                budget.mark_unuseful();
+            }
+            budget.nudge_message()
+        };
+        if let Some(msg) = nudge_msg {
+            self.push_system_reminder(&msg);
+        }
     }
     #[tracing::instrument(
         name = "session.process_conversation_turn",

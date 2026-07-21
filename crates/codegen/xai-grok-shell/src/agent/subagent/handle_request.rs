@@ -1176,6 +1176,7 @@ pub(crate) async fn handle_subagent_request(
             ctx.disable_web_search,
             ctx.backend_tools_enabled,
             ctx.respect_gitignore,
+            ctx.blocked_paths.clone(),
             ctx.path_not_found_hints,
             ctx.resolve_tool_params_json(),
             ctx.plugin_registry.clone(),

@@ -84,7 +84,8 @@ use super::settings::setters::{
     set_max_thoughts_width, set_multiline_mode, set_page_flip_on_send, set_prompt_suggestions,
     set_remember_tool_approvals, set_render_mermaid, set_respect_manual_folds, set_screen_mode,
     set_scroll_lines, set_scroll_mode, set_scroll_speed, set_show_thinking_blocks, set_show_tips,
-    set_simple_mode, set_theme, set_timeline, set_timestamps, set_vim_mode, set_voice_capture_mode,
+    set_simple_mode, set_theme, set_timeline, set_timestamps, set_diff_layout, toggle_diff_layout,
+    set_vim_mode, set_voice_capture_mode,
     set_voice_stt_language,
 };
 use super::settings::ui::{
@@ -962,6 +963,8 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::SetRenderMermaid(kind) => set_render_mermaid(app, kind),
         Action::SetCompactMode(v) => set_compact_mode(app, v),
         Action::SetTimestamps(v) => set_timestamps(app, v),
+        Action::ToggleDiffLayout => toggle_diff_layout(app),
+        Action::SetDiffLayout(v) => set_diff_layout(app, &v),
         Action::SetTimeline(v) => set_timeline(app, v),
         Action::SetPageFlipOnSend(v) => set_page_flip_on_send(app, v),
         Action::SetSimpleMode(v) => set_simple_mode(app, v),

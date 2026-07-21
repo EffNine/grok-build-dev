@@ -107,6 +107,7 @@ pub(crate) fn ctx_with_toggle(toggle: HashMap<String, bool>) -> SubagentSpawnCon
         laziness_debug_log: None,
         backend_tools_enabled: true,
         respect_gitignore: false,
+        blocked_paths: xai_grok_tools::util::DEFAULT_BLOCKED_PATHS.iter().map(|s| (*s).to_string()).collect(),
         path_not_found_hints: false,
         plugin_registry: None,
         models_manager: Default::default(),

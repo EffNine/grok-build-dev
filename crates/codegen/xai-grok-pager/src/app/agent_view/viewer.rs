@@ -2,6 +2,7 @@
 //! and their key/mouse handlers.
 
 use super::{AgentView, render_char_buttons};
+use crate::app::actions::Action;
 use crate::app::app_view::InputOutcome;
 use crate::key;
 use crate::scrollback::selection::SelectionBox;
@@ -893,6 +894,21 @@ impl AgentView {
                 viewer.rebuild_items(entry);
                 viewer.jump_to_source_line(entry, old_source_line);
             }
+        }
+
+        if viewer.diff_layout_toggle_pending {
+            viewer.diff_layout_toggle_pending = false;
+            use crate::scrollback::blocks::DiffLayout;
+            let next = DiffLayout::parse(&crate::appearance::cache::load_diff_layout())
+                .unwrap_or(DiffLayout::Unified)
+                .toggle();
+            // Optimistic cache update so rebuild paints the new layout immediately.
+            crate::appearance::cache::set_diff_layout(next.as_str());
+            viewer.list_state.set_scroll_anchor();
+            if let Some(entry) = self.scrollback.get_by_id(viewer.entry_id) {
+                viewer.rebuild_items(entry);
+            }
+            return InputOutcome::Action(Action::SetDiffLayout(next.as_str().to_string()));
         }
 
         // Process pending copy actions (logic lives in BlockViewerPane)

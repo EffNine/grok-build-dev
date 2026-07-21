@@ -173,6 +173,7 @@ pub(crate) async fn spawn_session_actor(
     disable_web_search: bool,
     backend_tools_enabled: bool,
     respect_gitignore: bool,
+    blocked_paths: Vec<String>,
     path_not_found_hints: bool,
     tool_params_json: crate::session::agent_rebuild::ResolvedToolParamsJson,
     plugin_registry: Option<std::sync::Arc<xai_grok_agent::plugins::PluginRegistry>>,
@@ -869,6 +870,7 @@ pub(crate) async fn spawn_session_actor(
         subagent_depth: tool_context.subagent_depth,
         session_id_str: session_info.id.0.to_string(),
         respect_gitignore,
+        blocked_paths,
         path_not_found_hints,
         scheduler_background_loops: crate::util::config::resolve_scheduler_background_loops(
             remote_settings
@@ -1191,6 +1193,7 @@ pub(crate) async fn spawn_session_actor(
             tool_choice: compaction_tool_choice,
             prefire: crate::session::compaction_config::PrefireState::default(),
             prefix_released: std::sync::atomic::AtomicBool::new(false),
+        token_budget: std::cell::RefCell::new(xai_token_estimation::TokenBudget::default()),
         },
         memory: super::memory_state::SessionMemory {
             flush_config: memory_config.as_ref().map_or_else(
@@ -1393,6 +1396,50 @@ pub(crate) async fn spawn_session_actor(
             .update_resource(xai_grok_tools::types::tool_index::ToolIndex(
                 std::sync::Arc::new(tool_index),
             ))
+            .await;
+    }
+    {
+        let mcp_state = std::sync::Arc::clone(&session.mcp_state);
+        let bridge = session.agent.borrow().tool_bridge().clone();
+        let callback = xai_grok_tools::types::resources::DeferredToolCallback::new(
+            move |qualified_name: &str| {
+                let mcp_state = std::sync::Arc::clone(&mcp_state);
+                let bridge = bridge.clone();
+                let name = qualified_name.to_string();
+                Box::pin(async move {
+                    let reg = {
+                        let mut state = mcp_state.lock().await;
+                        state.take_deferred_registration(&name)
+                    };
+                    if let Some(reg) = reg {
+                        if let Err(e) = bridge
+                            .register_mcp_tools(reg.name, reg.tool, Some(reg.input_schema))
+                            .await
+                        {
+                            tracing::warn!(
+                                tool = %name,
+                                error = %e,
+                                "Failed to register deferred MCP tool"
+                            );
+                            false
+                        } else {
+                            tracing::debug!(
+                                tool = %name,
+                                "Deferred MCP tool registered on demand"
+                            );
+                            true
+                        }
+                    } else {
+                        false
+                    }
+                })
+            },
+        );
+        session
+            .agent
+            .borrow()
+            .tool_bridge()
+            .update_resource(callback)
             .await;
     }
     if let Some(client) = managed_gateway_tool_client.clone() {
@@ -1786,6 +1833,7 @@ pub(crate) async fn spawn_session_on_thread(
     disable_web_search: bool,
     backend_tools_enabled: bool,
     respect_gitignore: bool,
+    blocked_paths: Vec<String>,
     path_not_found_hints: bool,
     tool_params_json: crate::session::agent_rebuild::ResolvedToolParamsJson,
     plugin_registry: Option<std::sync::Arc<xai_grok_agent::plugins::PluginRegistry>>,
@@ -1949,6 +1997,7 @@ pub(crate) async fn spawn_session_on_thread(
                         disable_web_search,
                         backend_tools_enabled,
                         respect_gitignore,
+                        blocked_paths,
                         path_not_found_hints,
                         tool_params_json,
                         plugin_registry,

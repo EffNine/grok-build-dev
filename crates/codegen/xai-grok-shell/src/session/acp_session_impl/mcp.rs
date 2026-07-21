@@ -293,6 +293,23 @@ impl SessionActor {
             self.emit_mcp_tools_changed_notifications(ui_tools);
         }
     }
+
+    /// True if the named MCP server is configured with `deferred = true`.
+    async fn is_deferred_server(&self, server_name: &str) -> bool {
+        let config_deferred = crate::util::config::get_mcp_server_config(server_name)
+            .and_then(|c| c.deferred)
+            .unwrap_or(false);
+        let meta_deferred = self
+            .mcp_state
+            .lock()
+            .await
+            .meta_config_map
+            .get(server_name)
+            .and_then(|m| m.deferred)
+            .unwrap_or(false);
+        config_deferred || meta_deferred
+    }
+
     pub(super) async fn register_mcp_tool(
         &self,
         server_name: &str,
@@ -342,6 +359,18 @@ impl SessionActor {
             );
             mcp_state
                 .disabled_tool_registrations
+                .insert(qualified_name, reg);
+            return;
+        }
+        let deferred = self.is_deferred_server(server_name).await;
+        if deferred && reg.model_visible {
+            tracing::info!(
+                "Deferring MCP tool '{}' from '{}' until discovered via search_tool/use_tool",
+                qualified_name,
+                server_name
+            );
+            mcp_state
+                .deferred_tool_registrations
                 .insert(qualified_name, reg);
             return;
         }

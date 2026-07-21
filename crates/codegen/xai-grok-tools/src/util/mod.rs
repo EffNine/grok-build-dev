@@ -10,6 +10,7 @@ pub mod image_compress;
 pub mod image_validate;
 pub mod mcp_truncate;
 pub mod path_suggestions;
+pub mod path_blocker;
 pub(crate) mod query_tools;
 pub mod remap;
 pub mod serde_base64;
@@ -25,6 +26,7 @@ pub use env::{GROK_AGENT_ENV, GROK_AGENT_ENV_VALUE, apply_grok_agent_marker, pag
 pub use fs::{UnicodePathMatch, canonicalize_with_timeout, try_resolve_unicode_filename};
 pub use grok_home::{grok_application, grok_home};
 pub use path_suggestions::format_not_found_error;
+pub use path_blocker::{DEFAULT_BLOCKED_PATHS, PathBlocker, parse_blocked_paths_env};
 pub use remap::{remap_json_keys, remap_schema_properties, reverse_map};
 pub use spawn::{
     ProcessGroup, ProcessScope, detach_command, global_process_scope, new_process_group,
