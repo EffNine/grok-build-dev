@@ -15,12 +15,12 @@ curl -fsSL https://raw.githubusercontent.com/effnine/grok-build-dev/main/install
 Pin a version:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/effnine/grok-build-dev/main/install.sh | bash -s 0.2.106
+curl -fsSL https://raw.githubusercontent.com/effnine/grok-build-dev/main/install.sh | bash -s 0.2.107
 ```
 
 This downloads the matching GitHub Release binary into `~/.grok/bin` and puts it on your `PATH`. macOS (arm64/x86_64) and Linux (x86_64/arm64) are supported.
 
-> Requires a published [GitHub Release](https://github.com/effnine/grok-build-dev/releases) with `grok-{version}-{os}-{arch}` assets. Tag `vX.Y.Z` (or run the **Release** workflow) to publish one.
+> Requires a published [GitHub Release](https://github.com/effnine/grok-build-dev/releases) with `grok-{version}-{os}-{arch}` assets. Tag `vX.Y.Z` (or run the **Release** workflow) to publish one. Latest with binaries: **v0.2.107**.
 
 ## Quick Start (BYOK)
 
