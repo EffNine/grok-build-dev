@@ -1,13 +1,15 @@
-//! `/usage` -- show credit usage or open billing management page.
+//! `/usage` -- show local token-usage info (BYOK fork has no billing page).
 
 use crate::app::actions::Action;
 use crate::slash::command::{AppCtx, ArgItem, CommandExecCtx, CommandResult, SlashCommand};
 
-/// Show coding credit usage or manage billing.
+/// Show local token-usage summary.
 ///
-/// `/usage`        -- show current credit usage
-/// `/usage show`   -- same as above
-/// `/usage manage` -- open billing management page in browser
+/// `/usage`      -- show current session token/context usage
+/// `/usage show` -- same as above
+///
+/// The original `manage` subcommand (opens x.ai billing) is removed in the
+/// Free/BYOK fork because there is no xAI subscription or credits to manage.
 pub struct UsageCommand;
 
 impl SlashCommand for UsageCommand {
@@ -15,19 +17,17 @@ impl SlashCommand for UsageCommand {
         "usage"
     }
 
-    /// `/cost` is the minimal-mode name for the same credit-usage summary:
-    /// it commits a usage/cost system block rather than opening a
-    /// pane, so it's an alias rather than a separate command.
+    /// `/cost` is the minimal-mode alias for the same local usage summary.
     fn aliases(&self) -> &[&str] {
         &["cost"]
     }
 
     fn description(&self) -> &str {
-        "View credit usage or manage billing"
+        "View local token / context usage"
     }
 
     fn usage(&self) -> &str {
-        "/usage [show|manage]"
+        "/usage [show]"
     }
 
     fn takes_args(&self) -> bool {
@@ -35,35 +35,27 @@ impl SlashCommand for UsageCommand {
     }
 
     fn arg_placeholder(&self) -> Option<&str> {
-        Some("show | manage")
+        Some("show")
     }
 
     fn suggest_args(&self, _ctx: &AppCtx, _args_query: &str) -> Option<Vec<ArgItem>> {
-        Some(vec![
-            ArgItem {
-                display: "show".to_string(),
-                match_text: "show".to_string(),
-                insert_text: "show".to_string(),
-                description: "View credit usage".to_string(),
-            },
-            ArgItem {
-                display: "manage".to_string(),
-                match_text: "manage".to_string(),
-                insert_text: "manage".to_string(),
-                description: "Open billing management page".to_string(),
-            },
-        ])
+        Some(vec![ArgItem {
+            display: "show".to_string(),
+            match_text: "show".to_string(),
+            insert_text: "show".to_string(),
+            description: "View local token / context usage".to_string(),
+        }])
     }
 
     fn run(&self, _ctx: &mut CommandExecCtx, args: &str) -> CommandResult {
         let arg = args.trim();
         match arg {
             "" | "show" => CommandResult::Action(Action::ShowUsage),
-            "manage" => {
-                CommandResult::Action(Action::OpenUrl("https://grok.com/?_s=usage".to_string()))
-            }
+            "manage" => CommandResult::Error(
+                "Billing management is not available in BYOK mode.".to_string(),
+            ),
             _ => CommandResult::Error(format!(
-                "Unknown argument: {arg}. Use /usage show or /usage manage"
+                "Unknown argument: {arg}. Use /usage show"
             )),
         }
     }

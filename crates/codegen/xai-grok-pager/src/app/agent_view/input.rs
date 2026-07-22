@@ -219,6 +219,30 @@ impl AgentView {
         }
         false
     }
+    /// True when the dashboard session overlay is in a state where a
+    /// `Ctrl+↑` / `Ctrl+↓` chord can safely cycle to the previous / next
+    /// session instead of being consumed by in-session UI.
+    ///
+    /// Requires:
+    /// - the view is in dashboard-overlay mode,
+    /// - no modal, media viewer, `/btw` panel, `/jump` picker, scrollback search,
+    ///   text selection, link highlight, or pending permission / plan / cancel /
+    ///   question overlay is owning the keyboard.
+    ///
+    /// `Ctrl+Arrow` is used deliberately so plain `↑`/`↓` keep their normal
+    /// meaning (prompt history / multiline caret, scrollback selection).
+    pub(crate) fn overlay_ctrl_updown_cycles(&self) -> bool {
+        self.in_dashboard_overlay
+            && self.no_input_overlay_pending()
+            && !self.modal_owns_input()
+            && self.highlighted_link_idx.is_none()
+            && self.persistent_text_selection.is_none()
+            && self.scrollback_search.is_none()
+            && self.btw_state.is_none()
+            && self.jump_state.is_none()
+            && self.rewind_state.is_none()
+            && !self.show_goal_detail
+    }
     /// Handle a terminal event when this agent view is active.
     ///
     /// Routes key events through three levels:

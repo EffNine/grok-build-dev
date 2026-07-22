@@ -3200,14 +3200,18 @@ impl DashboardState {
             }
         }
 
-        // Short-terminal open (peek suppressed). Right: empty prompt or
-        // list focus. Vim `l`: list focus only (same as `j`/`k`).
-        let open_row_detail = key.modifiers.is_empty()
-            && match key.code {
-                KeyCode::Right => prompt_empty || self.list_focused,
-                KeyCode::Char('l') if vim_mode => self.list_focused && !self.search_mode,
-                _ => false,
-            };
+        // Row-open gestures: bare Right (or Ctrl+Right) when the input is
+        // empty or the list is focused; vim `l` when the list is focused.
+        // Ctrl+Right is added so arrow navigation is consistent with the
+        // overlay's Ctrl+Left / Ctrl+Up / Ctrl+Down session switcher.
+        let open_row_detail = match key.code {
+            KeyCode::Right if key.modifiers.is_empty() => prompt_empty || self.list_focused,
+            KeyCode::Right if key.modifiers == KeyModifiers::CONTROL => {
+                prompt_empty || self.list_focused
+            }
+            KeyCode::Char('l') if vim_mode => self.list_focused && !self.search_mode,
+            _ => false,
+        };
         if open_row_detail && let Some(id) = self.selected.clone() {
             return InputOutcome::Action(Action::DashboardAttach(id));
         }
@@ -5673,6 +5677,21 @@ mod tests {
         let mut s = DashboardState::new();
         s.selected = Some(DashboardRowId::TopLevel(AgentId(0)));
         s
+    }
+
+    /// Ctrl+Right on a selected dashboard row (with the list focused) opens
+    /// the agent, matching the overlay's Ctrl+Left/Up/Down navigation.
+    #[test]
+    fn ctrl_right_attaches_selected_row() {
+        use crate::app::actions::Action;
+        let mut state = make_state_with_selection();
+        state.list_focused = true;
+        let reg = crate::actions::ActionRegistry::defaults();
+        let outcome = state.handle_key(&KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL), &reg);
+        assert!(
+            matches!(outcome, InputOutcome::Action(Action::DashboardAttach(ref id)) if *id == DashboardRowId::TopLevel(AgentId(0))),
+            "Ctrl+Right on a selected row must attach, got {outcome:?}",
+        );
     }
 
     fn peek_fields_for_test(response_type: &str) -> super::super::peek::PeekFields {
