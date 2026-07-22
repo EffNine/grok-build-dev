@@ -702,4 +702,30 @@ mod tests {
             Some(ActionId::ShortcutsHelp)
         );
     }
+
+    #[test]
+    fn brace_keys_jump_turns_in_both_modes() {
+        // Claude Code's transcript-mode `{` / `}` jump to the previous/next
+        // user prompt. In Grok Build, `PrevTurn` / `NextTurn` already do
+        // exactly that, so we expose the brace keys as alt bindings and
+        // confirm they resolve in both Simple and Vim modes (braces are
+        // non-letters and bypass the vim-off letter suppression in
+        // `lookup_with_mode`).
+        let registry = ActionRegistry::defaults();
+        let open_brace = KeyEvent::new(KeyCode::Char('{'), KeyModifiers::NONE);
+        let close_brace = KeyEvent::new(KeyCode::Char('}'), KeyModifiers::NONE);
+
+        for vim_mode in [true, false] {
+            assert_eq!(
+                registry.lookup_with_mode(&open_brace, When::ScrollbackFocused, vim_mode),
+                Some(ActionId::PrevTurn),
+                "`{{` must resolve to PrevTurn when vim_mode={vim_mode}"
+            );
+            assert_eq!(
+                registry.lookup_with_mode(&close_brace, When::ScrollbackFocused, vim_mode),
+                Some(ActionId::NextTurn),
+                "`}}` must resolve to NextTurn when vim_mode={vim_mode}"
+            );
+        }
+    }
 }
