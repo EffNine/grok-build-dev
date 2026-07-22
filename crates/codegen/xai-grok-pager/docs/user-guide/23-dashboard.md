@@ -118,7 +118,15 @@ position and overall padding match the dashboard list view. All key
 presses route to the attached agent; `Esc` / `Ctrl+\\` (or the `[Dashboard]`
 affordance) return to the dashboard, the `[‹]` / `[›]` chips cycle to
 the previous / next agent, and the agent's shortcuts bar shows a
-`Ctrl+\\: back to dashboard` hint. Quick gotcha — `Esc` only returns to
+`Ctrl+\\: back to dashboard` hint.
+
+You can also navigate with the arrow keys while holding **Ctrl**:
+`Ctrl+→` opens the selected agent from the dashboard list,
+`Ctrl+←` exits the details view back to the dashboard, and
+`Ctrl+↑` / `Ctrl+↓` cycle to the previous / next agent session.
+Plain `←↑↓→` keep their normal meaning (prompt editing and
+scrollback selection), so the shortcuts don't collide with chat
+editing. Quick gotcha — `Esc` only returns to
 the dashboard; typing `/exit` inside the agent actually closes the
 underlying session (returning to the dashboard with a "Session closed"
 toast).
