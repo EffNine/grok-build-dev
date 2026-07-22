@@ -1714,9 +1714,15 @@ mod tests {
         }
     }
     #[test]
-    fn inference_url_defaults_to_proxy() {
+    fn inference_url_defaults_to_xai_api_not_proxy() {
+        // Free/BYOK fork: without models_base_url, chat uses xai_api_base_url
+        // (default https://api.x.ai/v1), never cli-chat-proxy.
         let ep = endpoints("https://proxy.grok.com/v1", None, None);
-        assert_eq!(ep.resolve_inference_base_url(), "https://proxy.grok.com/v1");
+        assert_eq!(
+            ep.resolve_inference_base_url(),
+            crate::agent::config::XAI_API_BASE_URL_DEFAULT
+        );
+        assert_ne!(ep.resolve_inference_base_url(), "https://proxy.grok.com/v1");
     }
     #[test]
     fn inference_url_uses_models_base_url() {

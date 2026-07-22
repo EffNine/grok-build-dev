@@ -308,10 +308,15 @@ impl EndpointsConfig {
         blank_as_unset(&self.cli_chat_proxy_base_url)
             .unwrap_or_else(|| CLI_CHAT_PROXY_BASE_URL_DEFAULT.to_owned())
     }
+    /// Prefer `[endpoints].models_base_url` (BYOK / custom OpenAI-compatible
+    /// endpoint). When unset, fall back to `xai_api_base_url` — never the
+    /// cli-chat-proxy. This free/BYOK fork has no OAuth session path, so an
+    /// API key alone must still hit `api.x.ai` (or a configured xAI URL), not
+    /// `cli-chat-proxy.grok.com`.
     pub fn resolve_inference_base_url(&self) -> String {
         self.models_base_url
             .clone()
-            .unwrap_or_else(|| self.proxy_url())
+            .unwrap_or_else(|| self.xai_api_base_url.clone())
     }
     /// Feedback endpoint — an auxiliary service, so it defaults to the
     /// cli-chat-proxy, never `xai_api_base_url`.
@@ -5503,7 +5508,13 @@ reasoning_effort = "low"
         )
         .expect("hidden default web search model should resolve");
         assert_eq!(resolved.model, crate::models::default_web_search_model());
-        assert_eq!(resolved.base_url, endpoints.proxy_url());
+        // Free/BYOK fork: inference falls back to xai_api_base_url, not the proxy.
+        assert_eq!(resolved.base_url, endpoints.resolve_inference_base_url());
+        assert_ne!(
+            resolved.base_url,
+            endpoints.proxy_url(),
+            "hidden web-search helper must not route to cli-chat-proxy by default"
+        );
         assert_eq!(resolved.api_backend, ApiBackend::Responses);
         assert_eq!(
             resolved.api_key.as_deref(),
@@ -6644,7 +6655,9 @@ if field.as_deref() == Some("auth_provider"))
         );
     }
     #[test]
+    #[serial]
     fn user_override_adds_api_key_to_default_model() {
+        unset_endpoint_env_vars();
         let dm = crate::models::default_model();
         let raw_config: toml::Value = toml::from_str(&format!(
             r#"
@@ -6659,8 +6672,13 @@ if field.as_deref() == Some("auth_provider"))
         assert_eq!(model.api_key, Some("user-custom-api-key".to_string()));
         assert_eq!(model.info.model, dm);
         assert_eq!(
-            model.info.base_url, "https://cli-chat-proxy.grok.com/v1",
-            "base_url should inherit from default, not be stale"
+            model.info.base_url,
+            cfg.endpoints.resolve_inference_base_url(),
+            "base_url should inherit from endpoint inference resolver, not be stale"
+        );
+        assert_eq!(
+            model.info.base_url, "https://api.x.ai/v1",
+            "with endpoint env cleared, inference default is api.x.ai"
         );
     }
     #[test]
@@ -8380,6 +8398,10 @@ if field.as_deref() == Some("auth_provider"))
     /// INVARIANT: auxiliary-service resolvers resolve to the cli-chat-proxy, never
     /// `xai_api_base_url` — overriding ONLY inference keeps every aux endpoint on
     /// the proxy; explicit per-service overrides win verbatim.
+    ///
+    /// Free/BYOK fork: `resolve_inference_base_url` falls back to
+    /// `xai_api_base_url` (not the proxy) so an API key alone chats against
+    /// api.x.ai / a configured OpenAI-compatible host.
     #[test]
     #[serial]
     fn aux_endpoints_resolve_to_proxy_never_inference() {
@@ -8392,7 +8414,11 @@ if field.as_deref() == Some("auth_provider"))
         };
         let proxy = CLI_CHAT_PROXY_BASE_URL_DEFAULT;
         assert_eq!(cfg.proxy_url(), proxy);
-        assert_eq!(cfg.resolve_inference_base_url(), proxy);
+        assert_eq!(
+            cfg.resolve_inference_base_url(),
+            inference,
+            "BYOK fork: inference falls back to xai_api_base_url, not cli-chat-proxy"
+        );
         assert_eq!(cfg.resolve_models_list_url(), format!("{proxy}/models"));
         assert_eq!(
             cfg.resolve_managed_config_url(),
