@@ -97,7 +97,11 @@ fn handle_set_api_key(args: &acp::ExtRequest) -> ExtResult {
         .map_err(|e| acp::Error::internal_error().data(e.to_string()))
 }
 
-/// Persist a global API key + `models_base_url`, then fetch the provider model catalog.
+/// Persist a global API key + provider base URL, then fetch the model catalog.
+///
+/// Writes both `models_base_url` and `xai_api_base_url` so chat, `/models`
+/// fetch, and xAI-direct tools (image/video) all use the same OpenAI-compatible
+/// endpoint after restart.
 async fn handle_byok_configure(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
     #[derive(Deserialize)]
     struct ByokParams {
@@ -121,6 +125,7 @@ async fn handle_byok_configure(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtR
     unsafe {
         std::env::set_var("XAI_API_KEY", key);
         std::env::set_var("GROK_MODELS_BASE_URL", base_url);
+        std::env::set_var("GROK_XAI_API_BASE_URL", base_url);
         if let Some(ref list_url) = params.models_list_url {
             let list_url = list_url.trim();
             if !list_url.is_empty() {
@@ -129,7 +134,8 @@ async fn handle_byok_configure(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtR
         }
     }
 
-    persist_models_base_url(base_url, params.models_list_url.as_deref())
+    let config_path = grok_home.join("config.toml");
+    persist_byok_endpoints_to(&config_path, base_url, params.models_list_url.as_deref())
         .map_err(|e| acp::Error::internal_error().data(e))?;
 
     {
@@ -139,11 +145,15 @@ async fn handle_byok_configure(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtR
     {
         let mut cfg = agent.cfg.borrow_mut();
         cfg.endpoints.models_base_url = Some(base_url.to_string());
+        cfg.endpoints.xai_api_base_url = base_url.to_string();
         if let Some(ref list_url) = params.models_list_url {
             let list_url = list_url.trim();
             if !list_url.is_empty() {
                 cfg.endpoints.models_list_url = Some(list_url.to_string());
             }
+        } else {
+            // Stale list URL from a previous provider must not stick.
+            cfg.endpoints.models_list_url = None;
         }
     }
 
@@ -166,15 +176,20 @@ async fn handle_byok_configure(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtR
     .map_err(|e| acp::Error::internal_error().data(e.to_string()))
 }
 
-fn persist_models_base_url(
+/// Write BYOK endpoint URLs into `config.toml`.
+///
+/// Persists `models_base_url` and `xai_api_base_url` to the same value so a
+/// restart reloads the OpenAI-compatible (or xAI) URL without requiring env
+/// vars. Clears `models_list_url` when the caller omits it.
+fn persist_byok_endpoints_to(
+    config_path: &std::path::Path,
     base_url: &str,
     models_list_url: Option<&str>,
 ) -> Result<(), String> {
-    let config_path = crate::util::grok_home::grok_home().join("config.toml");
     if let Some(parent) = config_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let existing = crate::util::config::read_to_string_or_empty(&config_path)
+    let existing = crate::util::config::read_to_string_or_empty(config_path)
         .map_err(|e| format!("read config.toml: {e}"))?;
     let mut doc = if existing.trim().is_empty() {
         toml_edit::DocumentMut::new()
@@ -190,12 +205,98 @@ fn persist_models_base_url(
         .as_table_mut()
         .ok_or_else(|| "[endpoints] is not a table".to_string())?;
     endpoints["models_base_url"] = toml_edit::value(base_url);
+    endpoints["xai_api_base_url"] = toml_edit::value(base_url);
     if let Some(list_url) = models_list_url.map(str::trim).filter(|s| !s.is_empty()) {
         endpoints["models_list_url"] = toml_edit::value(list_url);
+    } else {
+        endpoints.remove("models_list_url");
     }
-    crate::util::config::atomic_write_string(&config_path, &doc.to_string())
+    crate::util::config::atomic_write_string(config_path, &doc.to_string())
         .map_err(|e| format!("write config.toml: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod byok_persist_tests {
+    use super::persist_byok_endpoints_to;
+    use crate::agent::config::{Config, EndpointsConfig};
+
+    #[test]
+    fn persist_byok_endpoints_saves_openai_url_to_both_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        persist_byok_endpoints_to(&config_path, "https://api.openai.com/v1", None)
+            .expect("persist");
+
+        let raw = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            raw.contains("models_base_url = \"https://api.openai.com/v1\""),
+            "models_base_url missing in:\n{raw}"
+        );
+        assert!(
+            raw.contains("xai_api_base_url = \"https://api.openai.com/v1\""),
+            "xai_api_base_url missing in:\n{raw}"
+        );
+        assert!(
+            !raw.contains("models_list_url"),
+            "stale models_list_url should be cleared:\n{raw}"
+        );
+
+        let value: toml::Value = toml::from_str(&raw).unwrap();
+        let cfg = Config::new_from_toml_cfg(&value).expect("reload");
+        assert_eq!(
+            cfg.endpoints.models_base_url.as_deref(),
+            Some("https://api.openai.com/v1")
+        );
+        assert_eq!(cfg.endpoints.xai_api_base_url, "https://api.openai.com/v1");
+        assert_eq!(
+            cfg.endpoints.resolve_inference_base_url(),
+            "https://api.openai.com/v1"
+        );
+    }
+
+    #[test]
+    fn persist_byok_endpoints_saves_xai_url_and_clears_stale_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        std::fs::write(
+            &config_path,
+            r#"[endpoints]
+models_list_url = "https://old.example/v1/models"
+"#,
+        )
+        .unwrap();
+
+        persist_byok_endpoints_to(&config_path, "https://api.x.ai/v1", None).expect("persist");
+        let raw = std::fs::read_to_string(&config_path).unwrap();
+        assert!(raw.contains("models_base_url = \"https://api.x.ai/v1\""));
+        assert!(raw.contains("xai_api_base_url = \"https://api.x.ai/v1\""));
+        assert!(
+            !raw.contains("models_list_url"),
+            "expected models_list_url cleared:\n{raw}"
+        );
+    }
+
+    #[test]
+    fn inference_falls_back_to_xai_api_not_proxy_when_models_base_unset() {
+        let cfg = EndpointsConfig {
+            models_base_url: None,
+            xai_api_base_url: "https://api.x.ai/v1".to_string(),
+            cli_chat_proxy_base_url: None,
+            ..Default::default()
+        };
+        assert_eq!(
+            cfg.resolve_inference_base_url(),
+            "https://api.x.ai/v1",
+            "API-key-only BYOK must not route chat to cli-chat-proxy"
+        );
+        assert_ne!(
+            cfg.resolve_inference_base_url(),
+            cfg.proxy_url(),
+            "proxy must not be the inference fallback in this fork"
+        );
+    }
 }
 
 /// Handle auth code submission from TUI.
