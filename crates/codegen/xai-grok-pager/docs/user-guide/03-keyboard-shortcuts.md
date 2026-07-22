@@ -32,8 +32,8 @@ Move through conversation entries in the scrollback pane.
 |-----|---------|--------|
 | `j` | `Down` | Select next entry |
 | `k` | `Up` | Select previous entry |
-| `⇧L` | `Shift+Right` | Jump to next turn (user prompt) |
-| `⇧H` | `Shift+Left` | Jump to previous turn (user prompt) |
+| `⇧L` | `Shift+Right`, `}` | Jump to next turn (user prompt) |
+| `⇧H` | `Shift+Left`, `{` | Jump to previous turn (user prompt) |
 | `⇧J` | | Jump to next assistant response |
 | `⇧K` | | Jump to previous assistant response |
 | `g` | | Go to top of scrollback |
@@ -44,6 +44,10 @@ Move through conversation entries in the scrollback pane.
 | `PageDown` | | Scroll down one page (selection moves to the bottom of the viewport) |
 | `Ctrl+U` | | Scroll up half page |
 | `Ctrl+D` (`Shift+D` in VSCode) | | Scroll down half page |
+
+`{` and `}` are inspired by Claude Code's transcript-mode paragraph motions: in
+both Simple and Vim modes they jump between user prompts, regardless of the
+`vim_mode` setting (they are not gated as bare-letter bindings).
 
 `PageUp` and `PageDown` also scroll the conversation while the ordinary prompt
 is focused, without moving focus or changing the draft. An active prompt
