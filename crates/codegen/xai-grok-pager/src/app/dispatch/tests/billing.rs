@@ -485,16 +485,16 @@ fn upsell_max_tier_not_idempotent_pushes_multiple_cards() {
 // ── ShowUsage dispatch tests ────────────────────────────────────────
 
 #[test]
-fn show_usage_returns_fetch_billing_effect() {
+fn show_usage_shows_byok_message_and_skips_fetch() {
     let mut app = test_app_with_agent();
+    let before = agent_scrollback_len(&app);
     let effects = dispatch(Action::ShowUsage, &mut app);
-    // One non-silent FetchBilling — the effect pulls billing + auto-topup
-    // together and renders a single summary.
-    assert_eq!(effects.len(), 1, "got: {effects:?}");
+    // Free/BYOK fork: no billing fetch, just a local explanatory message.
+    assert!(effects.is_empty(), "got: {effects:?}");
+    assert_eq!(agent_scrollback_len(&app), before + 1);
     assert!(
-        matches!(&effects[0], Effect::FetchBilling { agent_id, silent }
-if *agent_id == AgentId(0) && !*silent),
-        "effect should be a non-silent FetchBilling, got: {effects:?}"
+        last_system_text(&app, AgentId(0)).contains("Usage tracking is local in BYOK mode"),
+        "expected BYOK usage message"
     );
 }
 

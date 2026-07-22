@@ -914,23 +914,23 @@ fn show_usage_on_welcome_screen_is_noop() {
 }
 
 #[test]
-fn show_usage_with_redirect_url_shows_link_and_skips_fetch() {
+fn show_usage_with_redirect_url_shows_byok_message_and_skips_fetch() {
     let mut app = test_app_with_agent();
     app.usage_billing_redirect_url = Some("https://billing.example.com/me".to_string());
     let before = agent_scrollback_len(&app);
     let effects = dispatch(Action::ShowUsage, &mut app);
     assert!(
         effects.is_empty(),
-        "with a redirect URL set, ShowUsage should not fetch (billing or auto-topup), got: {effects:?}"
+        "ShowUsage should not fetch billing or auto-topup, got: {effects:?}"
     );
     assert_eq!(
         agent_scrollback_len(&app),
         before + 1,
-        "redirect path should push one system message with the billing link"
+        "BYOK path should push one system message"
     );
     assert!(
-        last_system_text(&app, AgentId(0)).contains("https://billing.example.com/me"),
-        "redirect message should use the remote settings-provided URL"
+        last_system_text(&app, AgentId(0)).contains("Usage tracking is local in BYOK mode"),
+        "expected BYOK usage message"
     );
 }
 

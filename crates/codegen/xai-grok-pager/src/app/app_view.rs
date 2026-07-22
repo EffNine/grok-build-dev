@@ -18,7 +18,7 @@ use crate::scrollback::render::ScratchBuffer;
 use crate::views::prompt_widget::PromptWidget;
 use crate::views::welcome::WelcomePromptFocus;
 use agent_client_protocol as acp;
-use crossterm::event::{Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use indexmap::IndexMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -2332,6 +2332,28 @@ impl AppView {
                             })
                         {
                             return InputOutcome::Action(Action::DashboardOverlayExit);
+                        }
+                        // Ctrl+Arrow session navigation inside the dashboard overlay.
+                        // Placed before the bare-arrow / q / Esc exit handlers so the
+                        // chord is uniform regardless of which pane is focused.
+                        if key.modifiers == KeyModifiers::CONTROL
+                            && self
+                                .agents
+                                .get(&id)
+                                .is_some_and(|a| a.overlay_ctrl_updown_cycles())
+                        {
+                            match key.code {
+                                KeyCode::Left => {
+                                    return InputOutcome::Action(Action::DashboardOverlayExit);
+                                }
+                                KeyCode::Up => {
+                                    return InputOutcome::Action(Action::DashboardOverlayPrev);
+                                }
+                                KeyCode::Down => {
+                                    return InputOutcome::Action(Action::DashboardOverlayNext);
+                                }
+                                _ => {}
+                            }
                         }
                         let neutral = self.agents.get(&id).is_some_and(|a| {
                             a.is_bare_scrollback() && a.no_input_overlay_pending()
@@ -10717,5 +10739,149 @@ pub(crate) mod tests {
             outcome,
             InputOutcome::Action(Action::CycleSessionSourceFilter)
         ));
+    }
+
+    // -----------------------------------------------------------------------
+    // Dashboard session overlay Ctrl+Arrow navigation
+    // -----------------------------------------------------------------------
+
+    fn add_agent(app: &mut AppView, id: super::super::agent::AgentId, session_id: &str) {
+        let mut agent = AgentView::new(
+            AgentSession {
+                id,
+                acp_tx: app.acp_tx.clone(),
+                session_id: Some(session_id.to_string().into()),
+                models: ModelState::default(),
+                state: AgentState::Idle,
+                tracker: AcpUpdateTracker::new(),
+                cwd: std::path::PathBuf::from("/tmp"),
+                is_worktree: false,
+                forked_from: None,
+                pending_prompts: std::collections::VecDeque::new(),
+                next_queue_id: 0,
+                yolo_mode: false,
+                auto_mode: false,
+                prompt_history: Vec::new(),
+                prompt_history_loading: false,
+                loading_replay: false,
+                restore_degree: None,
+                rate_limited: false,
+                model_incompatible: false,
+                credit_limit_blocked: false,
+                free_usage_blocked: false,
+                available_commands: Vec::new(),
+                available_commands_generation: 0,
+                available_tools: None,
+                model_switch_pending: false,
+                user_model_preference: None,
+                deferred_model_switch: None,
+                bg_tasks: std::collections::BTreeMap::new(),
+                bg_tool_call_to_task: std::collections::HashMap::new(),
+                scheduled_tasks: std::collections::HashMap::new(),
+                in_flight_prompt: None,
+                current_prompt_id: None,
+                created_via_new: false,
+            },
+            ScrollbackState::new(),
+        );
+        agent.active_pane = crate::app::agent_view::AgentPane::Scrollback;
+        app.agents.insert(id, agent);
+    }
+
+    fn two_agent_overlay_app() -> (
+        AppView,
+        super::super::agent::AgentId,
+        super::super::agent::AgentId,
+    ) {
+        let mut app = test_app_with_agent();
+        let id0 = super::super::agent::AgentId(0);
+        let id1 = super::super::agent::AgentId(1);
+        add_agent(&mut app, id1, "test-session-1");
+        // Mark both agents as working so the dashboard row builder keeps them
+        // visible (idle, empty sessions are hidden from the cycle order).
+        for id in [id0, id1] {
+            app.agents.get_mut(&id).unwrap().session.state = AgentState::TurnRunning;
+        }
+        app.active_view = ActiveView::Agent(id0);
+        app.dashboard = Some(crate::views::dashboard::DashboardState::new());
+        if let Some(d) = app.dashboard.as_mut() {
+            d.attached_agent = Some(id0);
+        }
+        app.agents.get_mut(&id0).unwrap().in_dashboard_overlay = true;
+        app.agents.get_mut(&id1).unwrap().in_dashboard_overlay = true;
+        (app, id0, id1)
+    }
+
+    #[test]
+    fn overlay_ctrl_left_exits_to_dashboard() {
+        let (mut app, id) = neutral_overlay_app();
+        app.agents.get_mut(&id).unwrap().in_dashboard_overlay = true;
+        let outcome = app.handle_input(&key_event(KeyCode::Left, KeyModifiers::CONTROL));
+        assert!(
+            matches!(outcome, InputOutcome::Action(Action::DashboardOverlayExit)),
+            "Ctrl+Left in a neutral overlay must exit to dashboard, got {outcome:?}",
+        );
+    }
+
+    #[test]
+    fn overlay_ctrl_up_cycles_to_prev_agent() {
+        let (mut app, _id0, id1) = two_agent_overlay_app();
+        let outcome = app.handle_input(&key_event(KeyCode::Up, KeyModifiers::CONTROL));
+        assert!(
+            matches!(outcome, InputOutcome::Action(Action::DashboardOverlayPrev)),
+            "Ctrl+Up in overlay must cycle to previous session, got {outcome:?}",
+        );
+        // Dispatch the action to verify it actually lands on the other agent.
+        let effects = crate::app::dispatch::dispatch(Action::DashboardOverlayPrev, &mut app);
+        assert!(effects.is_empty());
+        assert_eq!(app.active_view, ActiveView::Agent(id1));
+    }
+
+    #[test]
+    fn overlay_ctrl_down_cycles_to_next_agent() {
+        let (mut app, _id0, id1) = two_agent_overlay_app();
+        let outcome = app.handle_input(&key_event(KeyCode::Down, KeyModifiers::CONTROL));
+        assert!(
+            matches!(outcome, InputOutcome::Action(Action::DashboardOverlayNext)),
+            "Ctrl+Down in overlay must cycle to next session, got {outcome:?}",
+        );
+        let effects = crate::app::dispatch::dispatch(Action::DashboardOverlayNext, &mut app);
+        assert!(effects.is_empty());
+        assert_eq!(app.active_view, ActiveView::Agent(id1));
+    }
+
+    #[test]
+    fn overlay_ctrl_updown_no_cycle_while_input_overlay_pending() {
+        let (mut app, id) = neutral_overlay_app();
+        app.agents.get_mut(&id).unwrap().in_dashboard_overlay = true;
+        app.agents.get_mut(&id).unwrap().cancel_turn_view =
+            Some(crate::views::modal::CancelTurnViewState {
+                active_idx: 0,
+                running_count: 1,
+            });
+        for key in [KeyCode::Up, KeyCode::Down] {
+            let outcome = app.handle_input(&key_event(key, KeyModifiers::CONTROL));
+            assert!(
+                !matches!(
+                    outcome,
+                    InputOutcome::Action(
+                        Action::DashboardOverlayPrev | Action::DashboardOverlayNext
+                    )
+                ),
+                "Ctrl+{key:?} with an input overlay pending must not cycle, got {outcome:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn overlay_ctrl_left_no_exit_while_gboom_open() {
+        let (mut app, id) = neutral_overlay_app();
+        app.agents.get_mut(&id).unwrap().in_dashboard_overlay = true;
+        app.agents.get_mut(&id).unwrap().gboom = Some(crate::gboom::GboomState::new());
+        let outcome = app.handle_input(&key_event(KeyCode::Left, KeyModifiers::CONTROL));
+        assert!(
+            !matches!(outcome, InputOutcome::Action(Action::DashboardOverlayExit)),
+            "Ctrl+Left with /gboom open must reach the game, got {outcome:?}",
+        );
     }
 }
