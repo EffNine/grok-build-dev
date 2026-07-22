@@ -69,10 +69,13 @@ jobs:
           - runner: ubuntu-24.04-arm
             platform: linux-aarch64
             target: aarch64-unknown-linux-gnu
+          # Both macOS targets build on macos-14 (arm64 host). Apple Silicon
+          # runners can cross-compile x86_64-apple-darwin; macos-13 (Intel)
+          # runners are scarce and often stay queued indefinitely.
           - runner: macos-14
             platform: macos-aarch64
             target: aarch64-apple-darwin
-          - runner: macos-13
+          - runner: macos-14
             platform: macos-x86_64
             target: x86_64-apple-darwin
     runs-on: ${{ matrix.runner }}
@@ -106,7 +109,12 @@ jobs:
           OUT="grok-${VERSION}-${PLATFORM}"
           cp "$BIN" "$OUT"
           chmod +x "$OUT"
-          "./$OUT" --version || true
+          # Cross-compiled x86_64 cannot exec on arm64 hosts — skip smoke test.
+          if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+            echo "Skipping --version smoke test for cross-compiled ${{ matrix.target }}"
+          else
+            "./$OUT" --version || true
+          fi
           echo "artifact=$OUT" >> "$GITHUB_ENV"
 
       - name: Upload artifact
@@ -118,6 +126,8 @@ jobs:
 
   publish:
     needs: [version, build]
+    # Publish whatever platforms succeeded even if one matrix leg failed.
+    if: ${{ always() && needs.version.result == 'success' && needs.build.result != 'cancelled' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -127,9 +137,16 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+          # Partial matrix success still produces some artifacts.
+          pattern: grok-*
 
       - name: List assets
-        run: ls -lah dist/
+        run: |
+          ls -lah dist/ || true
+          if ! ls dist/grok-* >/dev/null 2>&1; then
+            echo "No release artifacts were produced; failing publish." >&2
+            exit 1
+          fi
 
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
@@ -138,6 +155,7 @@ jobs:
           name: Grok ${{ needs.version.outputs.version }}
           draft: false
           generate_release_notes: true
+          fail_on_unmatched_files: false
           files: dist/grok-*
           body: |
             BYOK fork release `${{ needs.version.outputs.version }}`.

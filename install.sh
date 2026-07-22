@@ -129,31 +129,55 @@ mkdir -p "$DOWNLOAD_DIR" "$BIN_DIR"
 API_BASE="https://api.github.com/repos/${REPO}"
 RELEASE_BASE="https://github.com/${REPO}/releases/download"
 
+artifact_suffix="$platform"
+if [ "$os" = "windows" ]; then
+    artifact_suffix="${platform}.exe"
+fi
+
+# Pick the newest release that actually ships a binary for this platform.
+# Skips empty tags (e.g. a notes-only GitHub Release with no assets).
+resolve_version_with_asset() {
+    local want_pre="$1"
+    local releases_json tag version_candidate cand_name
+    releases_json=$(download_file "${API_BASE}/releases?per_page=20" 2>/dev/null) || true
+    if [ -z "$releases_json" ]; then
+        return 1
+    fi
+    # Flatten JSON and walk tag_name values in API order (newest first).
+    while IFS= read -r tag; do
+        [ -n "$tag" ] || continue
+        version_candidate="${tag#v}"
+        # Stable channel: skip pre-release tags (contain '-') unless want_pre.
+        if [ "$want_pre" != "1" ] && [[ "$version_candidate" == *-* ]]; then
+            continue
+        fi
+        cand_name="grok-${version_candidate}-${artifact_suffix}"
+        # Asset present if the release JSON mentions its name.
+        if printf '%s' "$releases_json" | grep -Fq "\"name\":\"${cand_name}\"" \
+            || printf '%s' "$releases_json" | grep -Fq "\"name\": \"${cand_name}\""; then
+            printf '%s\n' "$version_candidate"
+            return 0
+        fi
+        echo "  Note: ${tag} has no ${cand_name}; trying older release..." >&2
+    done <<EOF
+$(printf '%s' "$releases_json" | tr ',' '\n' | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+EOF
+    return 1
+}
+
 if [ -n "$TARGET" ]; then
     version="$TARGET"
-    tag="v${version}"
     echo "Installing Grok $version ($platform) from ${REPO}..." >&2
 else
     echo "Fetching latest ${CHANNEL} release from ${REPO}..." >&2
-    if [ "$CHANNEL" = "alpha" ]; then
-        # Latest published release including pre-releases.
-        release_json=$(download_file "${API_BASE}/releases?per_page=1" 2>/dev/null) || true
-        # API returns an array; wrap extraction by taking the first object.
-        release_json=$(printf '%s' "$release_json" | tr '\n' ' ' | sed -n 's/^[[:space:]]*\[[[:space:]]*\({.*}\)[[:space:]]*\][[:space:]]*$/\1/p')
-    else
-        release_json=$(download_file "${API_BASE}/releases/latest" 2>/dev/null) || true
-    fi
-    if [ -z "$release_json" ]; then
-        echo "Error: failed to fetch release metadata from ${API_BASE}" >&2
-        echo "Hint: create a GitHub Release (tag vX.Y.Z) with platform binaries, or pass a version explicitly." >&2
+    want_pre=0
+    [ "$CHANNEL" = "alpha" ] && want_pre=1
+    if ! version=$(resolve_version_with_asset "$want_pre"); then
+        echo "Error: no release with a ${platform} binary found for ${REPO}" >&2
+        echo "Hint: publish a GitHub Release with asset grok-{version}-${artifact_suffix}" >&2
+        echo "  https://github.com/${REPO}/releases" >&2
         exit 1
     fi
-    tag=$(json_get "$release_json" "tag_name")
-    if [ -z "$tag" ]; then
-        echo "Error: no releases found for ${REPO}" >&2
-        exit 1
-    fi
-    version="${tag#v}"
     echo "Installing Grok $version ($platform) from ${REPO}..." >&2
 fi
 
@@ -162,10 +186,7 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9._]+)?$ ]]; then
     exit 1
 fi
 
-artifact_name="grok-${version}-${platform}"
-if [ "$os" = "windows" ]; then
-    artifact_name="${artifact_name}.exe"
-fi
+artifact_name="grok-${version}-${artifact_suffix}"
 artifact_url="${RELEASE_BASE}/v${version}/${artifact_name}"
 
 binary_path="$DOWNLOAD_DIR/grok-$platform"
