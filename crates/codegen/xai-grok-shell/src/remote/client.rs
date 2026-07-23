@@ -826,6 +826,13 @@ pub fn parse_remote_model_value(
             _ => None,
         })
         .unwrap_or_default();
+    let wire_hidden = obj
+        .get("hidden")
+        .or_else(|| meta.and_then(|m| m.get("hidden")))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let wire_status = get_string(obj, "status").or_else(|| meta.and_then(|m| get_string(m, "status")));
+    let hidden = wire_hidden || wire_status_implies_hidden(wire_status.as_deref());
     Some(crate::agent::config::ModelEntryConfig {
         id,
         model,
@@ -861,11 +868,7 @@ pub fn parse_remote_model_value(
         max_retries: get_u64(obj, "maxRetries")
             .or_else(|| get_u64(obj, "max_retries"))
             .and_then(|v| u32::try_from(v).ok()),
-        hidden: obj
-            .get("hidden")
-            .or_else(|| meta.and_then(|m| m.get("hidden")))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
+        hidden,
         supported_in_api: obj
             .get("supportedInApi")
             .or_else(|| obj.get("supported_in_api"))
@@ -941,6 +944,19 @@ pub fn parse_remote_model_value(
             })
             .unwrap_or_default(),
     })
+}
+
+/// Wire lifecycle statuses that should not appear in the `/model` picker.
+///
+/// First-party cli-chat-proxy catalogs used `hidden: true`. Some provider /
+/// gateway `/models` responses instead expose a `status` string; map the
+/// non-viable ones onto `ModelInfo::hidden` so BYOK "fetch all" still hides
+/// failed entries without restoring a curated allowlist.
+fn wire_status_implies_hidden(status: Option<&str>) -> bool {
+    matches!(
+        status.map(|s| s.trim().to_ascii_lowercase()).as_deref(),
+        Some("failed" | "inactive" | "disabled" | "unavailable" | "deprecated")
+    )
 }
 fn get_string(obj: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<String> {
     obj.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
@@ -1654,6 +1670,133 @@ mod tests {
         };
         assert_eq!(result.laziness_detector, expected);
     }
+    /// BYOK regression: provider `/models` catalogs often omit `hidden` and
+    /// (when they include lifecycle) use `status` instead. Honor both
+    /// `hidden: true` and non-viable `status` values when building the picker.
+    #[test]
+    fn parse_and_picker_visibility_for_provider_catalog() {
+        use crate::agent::config::{ModelEntry, ModelInfo};
+        use crate::agent::models::available_models;
+        use indexmap::IndexMap;
+
+        // (a) explicit hidden:true is filtered from the picker
+        let hidden_wire = serde_json::json!({
+            "id": "legacy-hidden",
+            "object": "model",
+            "owned_by": "xai",
+            "hidden": true
+        });
+        let hidden_cfg = parse_remote_model_value(&hidden_wire, "https://api.x.ai/v1").unwrap();
+        assert!(
+            hidden_cfg.hidden,
+            "wire hidden:true must parse as hidden"
+        );
+
+        // (b) plain OpenAI/xAI-shaped entries (id/object/owned_by only) ALL appear
+        let plain_wire = serde_json::json!({
+            "id": "grok-4",
+            "object": "model",
+            "owned_by": "xai"
+        });
+        let plain_cfg = parse_remote_model_value(&plain_wire, "https://api.x.ai/v1").unwrap();
+        assert!(
+            !plain_cfg.hidden,
+            "plain provider models must default to visible"
+        );
+
+        // (c) status:"failed" (and siblings) map to hidden
+        let failed_wire = serde_json::json!({
+            "id": "broken-model",
+            "object": "model",
+            "owned_by": "xai",
+            "status": "failed"
+        });
+        let failed_cfg = parse_remote_model_value(&failed_wire, "https://api.x.ai/v1").unwrap();
+        assert!(
+            failed_cfg.hidden,
+            "status:failed must parse as hidden"
+        );
+
+        let active_wire = serde_json::json!({
+            "id": "live-model",
+            "object": "model",
+            "owned_by": "xai",
+            "status": "active"
+        });
+        let active_cfg = parse_remote_model_value(&active_wire, "https://api.x.ai/v1").unwrap();
+        assert!(
+            !active_cfg.hidden,
+            "status:active must remain visible"
+        );
+
+        for status in ["inactive", "disabled", "unavailable", "deprecated", "FAILED"] {
+            let wire = serde_json::json!({
+                "id": format!("m-{status}"),
+                "object": "model",
+                "status": status
+            });
+            let cfg = parse_remote_model_value(&wire, "https://api.x.ai/v1").unwrap();
+            assert!(
+                cfg.hidden,
+                "status:{status} must parse as hidden"
+            );
+        }
+
+        // _meta.status is also honored
+        let meta_failed = serde_json::json!({
+            "id": "meta-failed",
+            "object": "model",
+            "_meta": { "status": "failed" }
+        });
+        assert!(
+            parse_remote_model_value(&meta_failed, "https://api.x.ai/v1")
+                .unwrap()
+                .hidden
+        );
+
+        let mut catalog = IndexMap::new();
+        for cfg in [hidden_cfg, plain_cfg, failed_cfg, active_cfg] {
+            let info = ModelInfo::from_config(&cfg);
+            let key = cfg.id.clone().unwrap_or_else(|| cfg.model.clone());
+            catalog.insert(
+                key,
+                ModelEntry {
+                    info,
+                    api_key: None,
+                    env_key: None,
+                    auth_provider: None,
+                    api_base_url: None,
+                },
+            );
+        }
+        let visible = available_models(&catalog, false);
+        let ids: Vec<_> = visible.keys().map(|id| id.0.as_ref()).collect();
+        assert!(
+            !ids.contains(&"legacy-hidden"),
+            "hidden:true must be filtered from picker"
+        );
+        assert!(
+            !ids.contains(&"broken-model"),
+            "status:failed must be filtered from picker"
+        );
+        assert!(
+            ids.contains(&"grok-4"),
+            "plain provider model must appear in picker"
+        );
+        assert!(
+            ids.contains(&"live-model"),
+            "status:active must appear in picker"
+        );
+    }
+
+    #[test]
+    fn wire_status_implies_hidden_matches_lifecycle_values() {
+        assert!(wire_status_implies_hidden(Some("failed")));
+        assert!(wire_status_implies_hidden(Some(" Inactive ")));
+        assert!(!wire_status_implies_hidden(Some("active")));
+        assert!(!wire_status_implies_hidden(None));
+    }
+
     #[test]
     fn parse_reads_show_model_fingerprint_field() {
         let value = serde_json::json!(
