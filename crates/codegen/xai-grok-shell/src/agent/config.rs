@@ -531,7 +531,11 @@ impl EndpointsConfig {
                 .map(|b| Resolved::new(format!("gs://{b}"), ConfigSource::Default))
         })
     }
-    /// `models_list_url` > `{models_base_url}/models` > `{proxy_base_url}/models`.
+    /// `models_list_url` > curated path for known hosts > `{models_base_url}/models`
+    /// > `{proxy_base_url}/models`.
+    ///
+    /// For xAI (`api.x.ai`), prefer `/language-models` (chat-only) over `/models`,
+    /// which also returns image/video generation IDs that fail in the coding picker.
     pub fn resolve_models_list_url(&self) -> String {
         if let Some(ref url) = self.models_list_url {
             return url.clone();
@@ -540,9 +544,32 @@ impl EndpointsConfig {
             .models_base_url
             .clone()
             .unwrap_or_else(|| self.proxy_url());
-        format!("{}/models", base)
+        models_catalog_url_for_base(&base)
     }
 }
+
+/// Build the default models-list URL for an OpenAI-compatible base URL.
+///
+/// xAI hosts use `/language-models` (curated chat catalog). Everyone else uses
+/// the OpenAI-compatible `/models` path.
+pub fn models_catalog_url_for_base(base: &str) -> String {
+    let base = base.trim_end_matches('/');
+    if is_xai_api_host(base) {
+        format!("{base}/language-models")
+    } else {
+        format!("{base}/models")
+    }
+}
+
+/// True when `base` points at xAI's OpenAI-compatible API (e.g. `https://api.x.ai/v1`).
+pub fn is_xai_api_host(base: &str) -> bool {
+    let Ok(url) = url::Url::parse(base) else {
+        return base.contains("api.x.ai");
+    };
+    url.host_str()
+        .is_some_and(|host| host == "api.x.ai" || host.ends_with(".x.ai"))
+}
+
 impl Default for EndpointsConfig {
     fn default() -> Self {
         Self {

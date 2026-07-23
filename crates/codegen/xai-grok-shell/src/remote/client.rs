@@ -661,8 +661,24 @@ pub async fn fetch_login_device_flow(cli_chat_proxy_base_url: &str) -> Option<bo
 pub(crate) const DEFAULT_CONTEXT_WINDOW: u64 = 256_000;
 #[derive(Debug, Deserialize)]
 struct ModelsResponse {
+    /// OpenAI-compatible `/models` envelope.
+    #[serde(default)]
     data: Vec<serde_json::Value>,
+    /// xAI `/language-models` (and image/video) envelope.
+    #[serde(default)]
+    models: Vec<serde_json::Value>,
 }
+
+impl ModelsResponse {
+    fn into_entries(self) -> Vec<serde_json::Value> {
+        if !self.data.is_empty() {
+            self.data
+        } else {
+            self.models
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EndpointAuth {
     ApiKey,
@@ -672,7 +688,7 @@ struct ListModelsEndpoint {
     url: String,
     auth: EndpointAuth,
 }
-/// The `/v1/models` URL [`fetch_models_blocking`] hits for this
+/// The models-list URL [`fetch_models_blocking`] hits for this
 /// endpoints/auth shape. Doubles as the models disk-cache origin key: cached
 /// entries embed absolute `base_url`s from the backend that served them, so a
 /// catalog fetched from one backend (env override, another deployment, a
@@ -695,7 +711,9 @@ impl ListModelsEndpoint {
             }
         } else if fetch_auth == crate::agent::models::ModelFetchAuth::ApiKey {
             Self {
-                url: format!("{}/models", endpoints.xai_api_base_url),
+                url: crate::agent::config::models_catalog_url_for_base(
+                    &endpoints.xai_api_base_url,
+                ),
                 auth: EndpointAuth::ApiKey,
             }
         } else {
@@ -767,13 +785,10 @@ pub(crate) fn fetch_models_blocking(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
     let models_response: ModelsResponse = response.json()?;
-    tracing::info!(
-        "Fetched {} models from {}",
-        models_response.data.len(),
-        source.url
-    );
-    let mut models = Vec::with_capacity(models_response.data.len());
-    for (idx, value) in models_response.data.into_iter().enumerate() {
+    let entries = models_response.into_entries();
+    tracing::info!("Fetched {} models from {}", entries.len(), source.url);
+    let mut models = Vec::with_capacity(entries.len());
+    for (idx, value) in entries.into_iter().enumerate() {
         match parse_remote_model_value(&value, &inference_base_url) {
             Some(model) => models.push(model),
             None => {
@@ -806,6 +821,8 @@ pub fn parse_remote_model_value(
     let name = get_string(obj, "name").or_else(|| Some(model.clone()));
     let context_window = get_u64(obj, "contextWindow")
         .or_else(|| get_u64(obj, "context_window"))
+        // xAI `/models` + `/language-models` use OpenAI-style `context_length`.
+        .or_else(|| get_u64(obj, "context_length"))
         .or_else(|| meta.and_then(|m| get_u64(m, "contextWindow")))
         .or_else(|| meta.and_then(|m| get_u64(m, "totalContextTokens")))
         .unwrap_or(DEFAULT_CONTEXT_WINDOW);
@@ -832,7 +849,11 @@ pub fn parse_remote_model_value(
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
     let wire_status = get_string(obj, "status").or_else(|| meta.and_then(|m| get_string(m, "status")));
-    let hidden = wire_hidden || wire_status_implies_hidden(wire_status.as_deref());
+    // Curate BYOK "fetch all" catalogs: hide failed lifecycle + non-chat
+    // (image/video/embedding) entries that would fail when used for coding.
+    let hidden = wire_hidden
+        || wire_status_implies_hidden(wire_status.as_deref())
+        || wire_implies_non_chat_hidden(obj);
     Some(crate::agent::config::ModelEntryConfig {
         id,
         model,
@@ -958,6 +979,59 @@ fn wire_status_implies_hidden(status: Option<&str>) -> bool {
         Some("failed" | "inactive" | "disabled" | "unavailable" | "deprecated")
     )
 }
+
+/// True when a `/models` entry is not usable as a coding/chat model.
+///
+/// xAI's OpenAI-compatible `/v1/models` mixes chat models with image/video
+/// generation IDs (`image_price` only). Selecting those in `/model` fails at
+/// inference time. Prefer `/language-models` for xAI hosts; this filter is the
+/// safety net when a full `/models` catalog is still fetched (OpenAI, proxies).
+fn wire_implies_non_chat_hidden(obj: &serde_json::Map<String, serde_json::Value>) -> bool {
+    if let Some(mods) = obj
+        .get("output_modalities")
+        .or_else(|| obj.get("outputModalities"))
+        .and_then(|v| v.as_array())
+    {
+        let has_text = mods.iter().any(|m| m.as_str() == Some("text"));
+        if !has_text {
+            return true;
+        }
+    }
+
+    if let Some(arch) = obj.get("architecture").and_then(|v| v.as_object()) {
+        if let Some(mods) = arch
+            .get("output_modalities")
+            .or_else(|| arch.get("outputModalities"))
+            .and_then(|v| v.as_array())
+        {
+            let has_text = mods.iter().any(|m| m.as_str() == Some("text"));
+            if !has_text {
+                return true;
+            }
+        }
+        if let Some(modality) = arch.get("modality").and_then(|v| v.as_str()) {
+            // OpenRouter-style "text->image" / "text+image->image"
+            if let Some(outputs) = modality.split("->").nth(1) {
+                if !outputs.split(['+', ',', ' ']).any(|p| p == "text") {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // xAI image-generation rows on `/v1/models`: priced per image, no chat
+    // completion token price.
+    let has_image_price = obj.get("image_price").is_some_and(|v| !v.is_null());
+    let has_completion_price = obj
+        .get("completion_text_token_price")
+        .is_some_and(|v| !v.is_null());
+    if has_image_price && !has_completion_price {
+        return true;
+    }
+
+    false
+}
+
 fn get_string(obj: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<String> {
     obj.get(key).and_then(|v| v.as_str()).map(|s| s.to_string())
 }
@@ -1798,6 +1872,81 @@ mod tests {
     }
 
     #[test]
+    fn xai_image_only_models_are_hidden_from_picker() {
+        // From xAI docs: /v1/models mixes chat + image-gen. Image rows have
+        // image_price and no completion_text_token_price — they fail as chat.
+        let image = serde_json::json!({
+            "id": "grok-imagine-image",
+            "object": "model",
+            "owned_by": "xai",
+            "context_length": 1024,
+            "image_price": 200000000
+        });
+        let cfg = parse_remote_model_value(&image, "https://api.x.ai/v1").unwrap();
+        assert!(
+            cfg.hidden,
+            "image-only xAI models must be hidden from /model"
+        );
+        assert_eq!(cfg.context_window.get(), 1024);
+
+        let chat = serde_json::json!({
+            "id": "grok-420-reasoning",
+            "object": "model",
+            "owned_by": "xai",
+            "context_length": 256000,
+            "prompt_text_token_price": 20000,
+            "completion_text_token_price": 80000
+        });
+        let cfg = parse_remote_model_value(&chat, "https://api.x.ai/v1").unwrap();
+        assert!(!cfg.hidden, "chat models with completion price stay visible");
+        assert_eq!(cfg.context_window.get(), 256000);
+    }
+
+    #[test]
+    fn output_modalities_without_text_are_hidden() {
+        let video = serde_json::json!({
+            "id": "grok-imagine-video",
+            "object": "model",
+            "output_modalities": ["video"]
+        });
+        assert!(
+            parse_remote_model_value(&video, "https://api.x.ai/v1")
+                .unwrap()
+                .hidden
+        );
+
+        let text = serde_json::json!({
+            "id": "grok-4",
+            "object": "model",
+            "output_modalities": ["text"]
+        });
+        assert!(
+            !parse_remote_model_value(&text, "https://api.x.ai/v1")
+                .unwrap()
+                .hidden
+        );
+    }
+
+    #[test]
+    fn models_response_accepts_language_models_envelope() {
+        let raw = serde_json::json!({
+            "models": [
+                {
+                    "id": "grok-4",
+                    "object": "model",
+                    "owned_by": "xai",
+                    "output_modalities": ["text"],
+                    "completion_text_token_price": 25000
+                }
+            ]
+        });
+        let resp: ModelsResponse = serde_json::from_value(raw).unwrap();
+        let entries = resp.into_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["id"], "grok-4");
+    }
+
+    #[test]
     fn parse_reads_show_model_fingerprint_field() {
         let value = serde_json::json!(
             { "model" : "grok-build", "context_window" : 256_000,
@@ -1906,7 +2055,23 @@ mod tests {
             Some("https://api.x.ai/v1"),
             None,
         );
-        assert_eq!(ep.resolve_models_list_url(), "https://api.x.ai/v1/models");
+        // xAI: curated chat catalog, not the mixed /models list.
+        assert_eq!(
+            ep.resolve_models_list_url(),
+            "https://api.x.ai/v1/language-models"
+        );
+    }
+    #[test]
+    fn list_url_openai_compatible_uses_models() {
+        let ep = endpoints(
+            "https://proxy.grok.com/v1",
+            Some("https://api.openai.com/v1"),
+            None,
+        );
+        assert_eq!(
+            ep.resolve_models_list_url(),
+            "https://api.openai.com/v1/models"
+        );
     }
     #[test]
     fn list_url_explicit_overrides_derivation() {
@@ -1955,7 +2120,7 @@ mod tests {
         let default = EndpointsConfig::from_config_value(&toml::Value::Table(Default::default()));
         assert_eq!(
             ListModelsEndpoint::from_endpoints(&default, ModelFetchAuth::ApiKey).url,
-            "https://api.x.ai/v1/models"
+            "https://api.x.ai/v1/language-models"
         );
         let custom = EndpointsConfig::from_config_value(
             &toml::from_str(
