@@ -1,10 +1,3 @@
-#![allow(
-    unused_imports,
-    unused_variables,
-    unused_mut,
-    unreachable_code,
-    dead_code
-)]
 #[cfg(all(test, feature = "dhat-heap"))]
 #[global_allocator]
 static DHAT_ALLOC: dhat::Alloc = dhat::Alloc;
