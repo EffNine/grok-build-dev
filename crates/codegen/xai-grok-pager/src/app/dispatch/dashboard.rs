@@ -1328,16 +1328,13 @@ pub(super) fn dispatch_dashboard_dispatch_slash(app: &mut AppView, text: String)
         // Tier-restricted commands stay visible for discoverability but must
         // not execute — and must not fall through to the unknown-command
         // path below (which would spawn a session with the raw slash text as
-        // its first prompt). The dashboard has no question-modal surface, so
-        // upsell via the feedback toast.
+        // its first prompt). Upstream upsells via toast; the Free/BYOK fork
+        // has no upgrade URL, so surface a local "not available" toast.
         if reg.is_restricted(invocation.token) {
             let token = invocation.token.to_string();
             if let Some(d) = app.dashboard.as_mut() {
                 d.dispatch.set_text("");
-                d.set_error_toast(&format!(
-                    "/{token} requires SuperGrok — upgrade at {}",
-                    super::billing::UPSELL_URL_UPGRADE
-                ));
+                d.set_error_toast(&format!("/{token} is not available."));
             }
             return vec![];
         }

@@ -1604,22 +1604,20 @@ fn rename_session_failed_keeps_local_display_name_and_pushes_system_block() {
 
 // ── GateRefreshed subscription flow ─────────────────────────────
 
-/// Regression: when the 30s gate poll detects the subscription gate has
-/// been lifted, it must emit `CheckSubscription` so the shell refreshes
-/// the JWT. Without this the auth token still lacks the subscription
-/// claim and all API calls return 403.
+/// Regression: when stored gate metadata is cleared via GateRefreshed,
+/// lift bookkeeping must emit `CheckSubscription` (JWT refresh path).
+/// Free/BYOK fork: access was never blocked; lift still clears metadata.
 #[test]
 fn gate_refreshed_emits_check_subscription_on_gate_lift() {
     let mut app = test_app();
-    // User starts gated (no subscription).
     app.gate = Some(xai_grok_shell::auth::GateInfo {
         message: "SuperGrok subscription required".into(),
         url: Some("https://grok.com/supergrok".into()),
         label: Some("Subscribe".into()),
     });
-    assert!(!app.has_access());
+    assert!(app.gate.is_some());
+    assert!(app.has_access(), "BYOK fork never blocks on gate metadata");
 
-    // Server-side settings now show no gate (user purchased subscription).
     let settings = xai_grok_shell::util::config::RemoteSettings::default();
     let effects = dispatch_task_result(
         TaskResult::GateRefreshed {
@@ -1628,11 +1626,8 @@ fn gate_refreshed_emits_check_subscription_on_gate_lift() {
         &mut app,
     );
 
-    // Gate must be lifted.
-    assert!(app.has_access(), "gate should be lifted");
+    assert!(app.gate.is_none(), "gate metadata should be lifted");
     assert!(app.welcome_prompt_focused, "prompt should be focused");
-
-    // Must emit CheckSubscription to trigger shell-side JWT refresh.
     assert!(
         effects
             .iter()
@@ -1641,10 +1636,11 @@ fn gate_refreshed_emits_check_subscription_on_gate_lift() {
     );
 }
 
-/// When the gate poll returns settings that still have a gate, no
-/// effects should be emitted and the user stays blocked.
+/// Free/BYOK fork: GateRefreshed never imposes remote subscription gates.
+/// Even when settings still carry a gate_message, stored gate metadata is
+/// lifted (and the JWT-refresh check fires when something was cleared).
 #[test]
-fn gate_refreshed_no_effect_when_still_gated() {
+fn gate_refreshed_never_imposes_remote_gate_in_byok_fork() {
     let mut app = test_app();
     app.gate = Some(xai_grok_shell::auth::GateInfo {
         message: "Subscribe".into(),
@@ -1663,8 +1659,14 @@ fn gate_refreshed_no_effect_when_still_gated() {
         &mut app,
     );
 
-    assert!(!app.has_access(), "gate should remain");
-    assert!(effects.is_empty(), "no effects when still gated");
+    assert!(app.gate.is_none(), "BYOK fork must clear stored gate metadata");
+    assert!(app.has_access());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::CheckSubscription { verify: None })),
+        "lift of stored gate must still refresh JWT; got: {effects:?}"
+    );
 }
 
 /// When the user was never gated, GateRefreshed is a no-op.
@@ -1684,14 +1686,13 @@ fn gate_refreshed_no_effect_when_already_unblocked() {
     assert!(effects.is_empty(), "no effects when already unblocked");
 }
 
-/// A gate newly imposed by the 30s settings poll (possibly stale) must be
-/// deferred for live verification instead of painting the paywall directly:
-/// the gate is held out of `app.gate` and a `CheckSubscription` +
-/// verify-timeout pair is emitted.
+/// Free/BYOK fork: a remote gate_message on the 30s settings poll must not
+/// defer or impose a subscription paywall.
 #[test]
-fn gate_refreshed_newly_blocked_defers_gate_for_verification() {
+fn gate_refreshed_newly_blocked_is_noop_in_byok_fork() {
     let mut app = test_app();
-    assert!(app.has_access()); // ungated
+    assert!(app.has_access());
+    assert!(app.gate.is_none());
 
     let settings = xai_grok_shell::util::config::RemoteSettings {
         gate_message: Some("Subscribe".into()),
@@ -1704,22 +1705,12 @@ fn gate_refreshed_newly_blocked_defers_gate_for_verification() {
         &mut app,
     );
 
+    assert!(app.gate.is_none());
+    assert!(app.pending_gate_verification.is_none());
+    assert!(app.has_access());
     assert!(
-        app.has_access(),
-        "deferred gate must not show as paywall before verification"
-    );
-    assert!(app.pending_gate_verification.is_some());
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::CheckSubscription { verify: Some(_) })),
-        "must live-check before showing the paywall; got: {effects:?}"
-    );
-    assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::ScheduleGateVerifyTimeout { .. })),
-        "must arm the verification timeout; got: {effects:?}"
+        effects.is_empty(),
+        "BYOK fork must not start verify/paywall chain; got: {effects:?}"
     );
 }
 
@@ -1754,10 +1745,10 @@ fn verify_check_with_meta_resolves_pending_gate() {
     assert!(app.pending_gate_verification.is_none());
 }
 
-/// The live check confirmed the block (meta WITH a gate): the paywall
-/// shows with the authoritative gate.
+/// The live check returned meta WITH a gate: authoritative gate metadata
+/// is stored. Free/BYOK fork: access stays open (no paywall).
 #[test]
-fn verify_check_with_gated_meta_shows_gate() {
+fn verify_check_with_gated_meta_stores_gate_without_blocking() {
     let mut app = test_app();
     let _effs = app.impose_gate(test_gate());
 
@@ -1774,14 +1765,16 @@ fn verify_check_with_gated_meta_shows_gate() {
         &mut app,
     );
 
-    assert!(!app.has_access(), "verified gate must show");
+    assert!(app.gate.is_some(), "authoritative gate metadata must be stored");
+    assert!(app.has_access(), "BYOK fork must not block on gate metadata");
     assert!(app.pending_gate_verification.is_none());
 }
 
 /// The verification's own check failed (meta None) while its stale gate
-/// was deferred: err on blocking — the deferred gate is promoted.
+/// was deferred: promote gate metadata. Free/BYOK fork: access stays open
+/// and the paywall auto-check chain does not arm (`has_access` is always true).
 #[test]
-fn verify_check_failure_promotes_pending_gate() {
+fn verify_check_failure_promotes_pending_gate_without_paywall() {
     let mut app = test_app();
     let _effs = app.impose_gate(test_gate());
 
@@ -1793,13 +1786,14 @@ fn verify_check_failure_promotes_pending_gate() {
         &mut app,
     );
 
-    assert!(!app.has_access(), "check failed — deferred gate must show");
+    assert!(app.gate.is_some(), "check failed — deferred gate metadata promoted");
+    assert!(app.has_access(), "BYOK fork must not block after promote");
     assert!(app.pending_gate_verification.is_none());
     assert!(
-        effects
+        !effects
             .iter()
             .any(|e| matches!(e, Effect::SchedulePaywallCheck)),
-        "freshly shown gate must arm the 5s auto-lift chain; got: {effects:?}"
+        "BYOK fork must not arm paywall chain; got: {effects:?}"
     );
 }
 
@@ -1873,10 +1867,10 @@ fn check_subscription_complete_failure_without_pending_gate_is_noop() {
 }
 
 /// The verification window expired before the live check resolved:
-/// err on blocking — the deferred gate is promoted, and the freshly shown
-/// paywall gets the 5s auto-lift chain.
+/// promote deferred gate metadata. Free/BYOK fork: access stays open and
+/// the paywall auto-check chain does not arm.
 #[test]
-fn gate_verify_timeout_promotes_pending_gate() {
+fn gate_verify_timeout_promotes_pending_gate_without_paywall() {
     let mut app = test_app();
     let _effs = app.impose_gate(test_gate());
     assert!(app.has_access());
@@ -1888,17 +1882,18 @@ fn gate_verify_timeout_promotes_pending_gate() {
         &mut app,
     );
 
-    assert!(!app.has_access(), "timeout — deferred gate must show");
+    assert!(app.gate.is_some(), "timeout — deferred gate metadata promoted");
+    assert!(app.has_access(), "BYOK fork must not block after promote");
     assert!(app.pending_gate_verification.is_none());
     assert!(
-        app.paywall_check_started.is_some(),
-        "promoted gate must arm the paywall auto-check chain"
+        app.paywall_check_started.is_none(),
+        "BYOK fork must not arm paywall auto-check"
     );
     assert!(
-        effects
+        !effects
             .iter()
             .any(|e| matches!(e, Effect::SchedulePaywallCheck)),
-        "promoted gate must schedule the 5s chain; got: {effects:?}"
+        "BYOK fork must not schedule paywall chain; got: {effects:?}"
     );
 }
 
@@ -1965,11 +1960,11 @@ fn gate_verify_timeout_stale_generation_is_ignored() {
     );
 }
 
-/// A verified gate landing via `CheckSubscriptionComplete` (gated meta while
-/// ungated) must arm the 5s paywall auto-check chain — verify-before-paywall
-/// paths never went through the login-path chain start.
+/// Free/BYOK fork: gated meta via `CheckSubscriptionComplete` stores gate
+/// metadata but never arms the paywall auto-check chain (`has_access` is
+/// always true, so ungated→gated transitions cannot occur for access).
 #[test]
-fn verified_gate_via_check_complete_starts_paywall_chain() {
+fn verified_gate_via_check_complete_does_not_start_paywall_in_byok_fork() {
     let mut app = test_app();
     let _effs = app.impose_gate(test_gate());
 
@@ -1986,20 +1981,16 @@ fn verified_gate_via_check_complete_starts_paywall_chain() {
         &mut app,
     );
 
-    assert!(!app.has_access());
+    assert!(app.gate.is_some());
+    assert!(app.has_access());
+    assert!(app.paywall_check_started.is_none());
     assert!(
-        app.paywall_check_started.is_some(),
-        "verified gate must arm the paywall auto-check chain"
-    );
-    assert!(
-        effects
+        !effects
             .iter()
             .any(|e| matches!(e, Effect::SchedulePaywallCheck)),
-        "verified gate must schedule the 5s chain; got: {effects:?}"
+        "BYOK fork must not schedule paywall chain; got: {effects:?}"
     );
 
-    // Steady-state paywall-poller responses (already gated) must NOT fan
-    // out extra timers.
     let meta = serde_json::to_value(xai_grok_shell::auth::AuthMeta {
         gate: Some(test_gate()),
         ..Default::default()
@@ -2014,7 +2005,7 @@ fn verified_gate_via_check_complete_starts_paywall_chain() {
     );
     assert!(
         effects.is_empty(),
-        "already-gated check responses must not schedule more timers; got: {effects:?}"
+        "repeat gated check responses must stay quiet; got: {effects:?}"
     );
 }
 

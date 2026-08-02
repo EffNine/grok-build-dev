@@ -40,28 +40,30 @@ fn voice_target_for_view(app: &AppView) -> Option<VoiceTarget> {
     }
 }
 
-/// Show the SuperGrok upsell when a tier-restricted (free / X Basic) user tries
-/// to start voice via the Ctrl+Space / F8 keybinding, which bypasses the slash
-/// registry (`/voice` is instead hidden + upsold via the deny list). Mirrors the
-/// slash-command upsell surfaces: a Q&A modal on an agent screen
-/// ([`super::billing::open_restricted_command_upsell`]), the feedback toast on
-/// the dashboard (which has no modal surface), and a silent no-op elsewhere
-/// (e.g. the welcome screen, which has no agent to host the modal). Never starts
-/// voice; always returns no effects.
+/// Gate voice when a tier-restricted user tries to start it via the
+/// Ctrl+Space / F8 keybinding (which bypasses the slash registry). Upstream
+/// opens a SuperGrok upsell; the Free/BYOK fork has no upsell modal — surface
+/// a local "not available" message on agent/dashboard surfaces, and stay a
+/// silent no-op elsewhere. Never starts voice; always returns no effects.
 fn open_voice_tier_upsell(app: &mut AppView) -> Vec<Effect> {
     let login_method = app.login_method_id.as_ref().map(|id| id.0.to_string());
     match app.active_view {
         ActiveView::Agent(id) => {
             if let Some(agent) = app.agents.get_mut(&id) {
-                super::billing::open_restricted_command_upsell(agent, login_method);
+                let opened =
+                    super::billing::open_restricted_command_upsell(agent, login_method);
+                if !opened {
+                    agent.scrollback.push_block(
+                        crate::scrollback::block::RenderBlock::system(
+                            "/voice is not available.",
+                        ),
+                    );
+                }
             }
         }
         ActiveView::AgentDashboard => {
             if let Some(d) = app.dashboard.as_mut() {
-                d.set_error_toast(&format!(
-                    "/voice requires SuperGrok — upgrade at {}",
-                    super::billing::UPSELL_URL_UPGRADE
-                ));
+                d.set_error_toast("/voice is not available.");
             }
         }
         _ => {}
@@ -95,11 +97,10 @@ pub(super) fn dispatch_enable_voice_mode(app: &mut AppView, from_hold: bool) -> 
     if !app.voice_mode_enabled || !xai_grok_voice::AUDIO_SUPPORTED {
         return vec![];
     }
-    // Tier gate: free / X Basic personal users can't use voice (the server
-    // zero-limits these tiers). The Ctrl+Space / F8 keybinding bypasses the
-    // slash registry, so this is the enforcement point for it — show the
-    // SuperGrok upsell instead of starting a doomed session (`/voice` itself is
-    // separately hidden + upsold via the deny list).
+    // Tier gate: when `/voice` is on the deny list, the Ctrl+Space / F8
+    // keybinding still needs an enforcement point (it bypasses the slash
+    // registry). Free/BYOK fork: no SuperGrok modal — local not-available
+    // feedback via [`open_voice_tier_upsell`].
     if app.is_voice_tier_restricted() {
         return open_voice_tier_upsell(app);
     }
