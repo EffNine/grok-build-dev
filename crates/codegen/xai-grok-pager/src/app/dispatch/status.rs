@@ -298,8 +298,12 @@ pub(super) fn format_local_usage_summary(agent: &AgentView) -> String {
         format!("Model: {model}"),
     ];
 
+    // Live ACP notifications often carry only used/total; prefer scrollback's
+    // turn index when the snapshot's turn_count is still zero.
+    let scrollback_turns = agent.scrollback.turn_count() as u64;
+
     match agent.context_state.as_ref() {
-        Some(ctx) if ctx.total > 0 || ctx.used > 0 || ctx.turn_count > 0 => {
+        Some(ctx) if ctx.total > 0 || ctx.used > 0 || ctx.turn_count > 0 || scrollback_turns > 0 => {
             let pct = if ctx.total > 0 {
                 (ctx.used as f64 / ctx.total as f64) * 100.0
             } else {
@@ -311,10 +315,15 @@ pub(super) fn format_local_usage_summary(agent: &AgentView) -> String {
                 fmt_tokens(ctx.total),
             ));
             lines.push(format!("Free: ~{} tokens", fmt_tokens(ctx.free_tokens)));
+            let turns = ctx.turn_count.max(scrollback_turns);
             lines.push(format!(
-                "Turns: {} · Tool calls: {} · Compactions: {}",
-                ctx.turn_count, ctx.tool_call_count, ctx.compaction_count
+                "Turns: {turns} · Tool calls: {} · Compactions: {}",
+                ctx.tool_call_count, ctx.compaction_count
             ));
+        }
+        _ if scrollback_turns > 0 => {
+            lines.push("Context: usage snapshot not available yet".to_string());
+            lines.push(format!("Turns: {scrollback_turns}"));
         }
         _ => {
             lines.push("Context: no usage recorded yet".to_string());
