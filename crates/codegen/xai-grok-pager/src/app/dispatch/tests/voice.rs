@@ -151,29 +151,23 @@ fn voice_ctrl_space_release_leaves_toggle_recording_running() {
     );
 }
 
-/// A free-tier user hitting the voice keybinding gets the SuperGrok upsell
-/// instead of a doomed voice session — the keybinding bypasses the slash
-/// registry, so this dispatcher is the enforcement point.
+/// Free/BYOK fork: subscription tier never gates voice. A free-tier stamp
+/// must not open the SuperGrok upsell on the voice keybinding.
 #[test]
-fn voice_keybinding_on_restricted_tier_opens_upsell() {
+fn voice_keybinding_on_free_tier_not_gated_in_byok_fork() {
     if !xai_grok_voice::AUDIO_SUPPORTED {
         return; // The tier check runs after the AUDIO_SUPPORTED gate.
     }
     let mut app = test_app_with_agent();
     app.voice_mode_enabled = true;
-    // Personal login without a subscription tier ⇒ free tier ⇒ voice restricted.
     app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta::default());
-    assert!(app.is_voice_tier_restricted());
+    assert!(!app.is_voice_tier_restricted());
 
     dispatch(Action::EnableVoiceMode, &mut app);
 
     assert!(
-        app.agents.get(&AgentId(0)).unwrap().question_view.is_some(),
-        "restricted-tier voice keybinding must open the SuperGrok upsell"
-    );
-    assert!(
-        !app.voice_listening(),
-        "voice must not start on a restricted tier"
+        app.agents.get(&AgentId(0)).unwrap().question_view.is_none(),
+        "BYOK fork must not open a SuperGrok upsell for voice"
     );
 }
 
