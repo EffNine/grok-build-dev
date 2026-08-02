@@ -508,10 +508,16 @@ Log out and return to the login screen.
 
 ### `/usage`
 
-View credit usage or manage billing.
+Show local session token / context usage (BYOK). Summarizes the cached
+context-window snapshot for the active session — model, tokens used vs
+window, turns, tool calls, and compactions. There is no xAI billing page
+in this fork; `/usage manage` returns an error. For the full categorical
+breakdown, run [`/context`](#context).
 
 ```
 /usage
+/usage show
+/cost
 ```
 
 ### `/privacy`

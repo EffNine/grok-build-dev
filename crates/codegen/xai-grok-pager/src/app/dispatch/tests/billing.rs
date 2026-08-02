@@ -489,12 +489,21 @@ fn show_usage_shows_byok_message_and_skips_fetch() {
     let mut app = test_app_with_agent();
     let before = agent_scrollback_len(&app);
     let effects = dispatch(Action::ShowUsage, &mut app);
-    // Free/BYOK fork: no billing fetch, just a local explanatory message.
+    // Free/BYOK fork: no billing fetch, just a local summary message.
     assert!(effects.is_empty(), "got: {effects:?}");
     assert_eq!(agent_scrollback_len(&app), before + 1);
+    let text = last_system_text(&app, AgentId(0));
     assert!(
-        last_system_text(&app, AgentId(0)).contains("Usage tracking is local in BYOK mode"),
-        "expected BYOK usage message"
+        text.contains("Usage (local · BYOK)"),
+        "expected local usage header, got: {text:?}"
+    );
+    assert!(
+        text.contains("No xAI billing/credits"),
+        "expected BYOK billing note, got: {text:?}"
+    );
+    assert!(
+        text.contains("no usage recorded yet"),
+        "empty context_state should say so, got: {text:?}"
     );
 }
 
