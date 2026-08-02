@@ -928,9 +928,76 @@ fn show_usage_with_redirect_url_shows_byok_message_and_skips_fetch() {
         before + 1,
         "BYOK path should push one system message"
     );
+    let text = last_system_text(&app, AgentId(0));
     assert!(
-        last_system_text(&app, AgentId(0)).contains("Usage tracking is local in BYOK mode"),
-        "expected BYOK usage message"
+        text.contains("Usage (local · BYOK)"),
+        "expected local usage header, got: {text:?}"
+    );
+    assert!(
+        text.contains("No xAI billing/credits"),
+        "expected BYOK billing note, got: {text:?}"
+    );
+}
+
+#[test]
+fn show_usage_summarizes_cached_context_state() {
+    let mut app = test_app_with_agent();
+    {
+        let agent = app.agents.get_mut(&AgentId(0)).unwrap();
+        agent.context_state = Some(xai_grok_shell::session::ContextInfo {
+            used: 13_200,
+            total: 256_000,
+            free_tokens: 242_800,
+            usage_pct: 5,
+            turn_count: 3,
+            tool_call_count: 2,
+            compaction_count: 1,
+            ..Default::default()
+        });
+    }
+    let effects = dispatch(Action::ShowUsage, &mut app);
+    assert!(effects.is_empty(), "got: {effects:?}");
+    let text = last_system_text(&app, AgentId(0));
+    assert!(
+        text.contains("Usage (local · BYOK)"),
+        "missing header: {text:?}"
+    );
+    assert!(
+        text.contains("Context:") && text.contains("tokens"),
+        "missing context line: {text:?}"
+    );
+    assert!(
+        text.contains("Turns: 3") && text.contains("Tool calls: 2") && text.contains("Compactions: 1"),
+        "missing session stats: {text:?}"
+    );
+    assert!(
+        text.contains("Run /context for a full breakdown"),
+        "missing /context tip: {text:?}"
+    );
+}
+
+#[test]
+fn show_usage_prefers_scrollback_turn_count_when_snapshot_turns_zero() {
+    let mut app = test_app_with_agent();
+    {
+        let agent = app.agents.get_mut(&AgentId(0)).unwrap();
+        agent.context_state = Some(xai_grok_shell::session::ContextInfo {
+            used: 11_000,
+            total: 256_000,
+            free_tokens: 245_000,
+            usage_pct: 4,
+            turn_count: 0, // live notification path often leaves this at 0
+            ..Default::default()
+        });
+        // One user prompt → one scrollback turn.
+        agent.scrollback.push_block(RenderBlock::user_prompt("hello"));
+    }
+    let effects = dispatch(Action::ShowUsage, &mut app);
+    assert!(effects.is_empty(), "got: {effects:?}");
+    let text = last_system_text(&app, AgentId(0));
+    assert!(
+        text.contains("Turns: 1"),
+        "should use scrollback turn_count when snapshot is 0, got: {text:?}"
     );
 }
 

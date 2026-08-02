@@ -255,21 +255,84 @@ pub(super) fn dispatch_show_context_info(app: &mut AppView) -> Vec<Effect> {
 
 /// Show local usage info.
 ///
-/// Free/BYOK fork: there is no xAI billing/credits system to query, so we
-/// display a short explanatory message instead of fetching remote billing data
-/// or opening a subscription management page.
+/// Free/BYOK fork: there is no xAI billing/credits system to query. Instead
+/// we summarize the session's local context-window snapshot (same source as
+/// the status-bar `13K / 256K` read) and point users at `/context` for the
+/// full categorical breakdown.
 pub(super) fn dispatch_show_usage(app: &mut AppView) -> Vec<Effect> {
     let ActiveView::Agent(id) = app.active_view else {
         return vec![];
     };
     if let Some(agent) = app.agents.get_mut(&id) {
+        let text = format_local_usage_summary(agent);
         agent.scrollback.push_block(RenderBlock::System(
-            crate::scrollback::blocks::SystemMessageBlock::new(
-                "Usage tracking is local in BYOK mode. No xAI billing/credits data is available.".to_string(),
-            ),
+            crate::scrollback::blocks::SystemMessageBlock::new(text),
         ));
     }
     vec![]
+}
+
+/// Compact `/usage` summary from the agent's cached context-window snapshot.
+///
+/// Sync and local — no billing fetch. Empty / missing snapshots still produce
+/// a helpful BYOK-aware message so the slash command never falls through.
+pub(super) fn format_local_usage_summary(agent: &AgentView) -> String {
+    use crate::views::context_bar::fmt_tokens;
+
+    let model = agent
+        .session
+        .models
+        .current_model_name()
+        .or_else(|| {
+            agent
+                .session
+                .models
+                .current_model_id_str()
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let mut lines = vec![
+        "Usage (local · BYOK)".to_string(),
+        String::new(),
+        format!("Model: {model}"),
+    ];
+
+    // Live ACP notifications often carry only used/total; prefer scrollback's
+    // turn index when the snapshot's turn_count is still zero.
+    let scrollback_turns = agent.scrollback.turn_count() as u64;
+
+    match agent.context_state.as_ref() {
+        Some(ctx) if ctx.total > 0 || ctx.used > 0 || ctx.turn_count > 0 || scrollback_turns > 0 => {
+            let pct = if ctx.total > 0 {
+                (ctx.used as f64 / ctx.total as f64) * 100.0
+            } else {
+                f64::from(ctx.usage_pct)
+            };
+            lines.push(format!(
+                "Context: {} / {} tokens ({pct:.1}%)",
+                fmt_tokens(ctx.used),
+                fmt_tokens(ctx.total),
+            ));
+            lines.push(format!("Free: ~{} tokens", fmt_tokens(ctx.free_tokens)));
+            let turns = ctx.turn_count.max(scrollback_turns);
+            lines.push(format!(
+                "Turns: {turns} · Tool calls: {} · Compactions: {}",
+                ctx.tool_call_count, ctx.compaction_count
+            ));
+        }
+        _ if scrollback_turns > 0 => {
+            lines.push("Context: usage snapshot not available yet".to_string());
+            lines.push(format!("Turns: {scrollback_turns}"));
+        }
+        _ => {
+            lines.push("Context: no usage recorded yet".to_string());
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("No xAI billing/credits. Run /context for a full breakdown.".to_string());
+    lines.join("\n")
 }
 
 /// Commit a one-line "update available" notice into the active agent's
