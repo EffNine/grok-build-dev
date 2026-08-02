@@ -22,6 +22,20 @@ This downloads the matching GitHub Release binary into `~/.grok/bin` and puts it
 
 > Requires a published [GitHub Release](https://github.com/effnine/grok-build-dev/releases) with `grok-{version}-{os}-{arch}` assets. Tag `vX.Y.Z` (or run the **Release** workflow) to publish one. Latest with binaries: **v0.2.107**.
 
+### Updates
+
+`grok update` and startup auto-update pull from this repo’s
+[GitHub Releases](https://github.com/effnine/grok-build-dev/releases)
+(`installer = "gh-release"`). Install via `install.sh` writes that setting into
+`~/.grok/config.toml`; builds without a config also default to GitHub Releases
+(not the x.ai CDN). Requires [`gh`](https://cli.github.com/) on `PATH` for
+in-app updates.
+
+```sh
+grok update          # install latest release binary
+grok update --check  # print current vs latest
+```
+
 ## Quick Start (BYOK)
 
 Export your provider key and base URL, then launch the TUI:

@@ -11,10 +11,12 @@ use xai_grok_shell::util::grok_home::grok_home;
 
 const TTL_SECONDS_BEFORE_AUTO_UPDATE: Duration = Duration::from_secs(60 * 30);
 const NPM_PACKAGE: &str = "@xai-official/grok";
+/// GitHub `owner/repo` used by the `gh-release` installer (default for this
+/// Free/BYOK fork). Auto-update / `grok update` fetch tags + assets here.
 pub const GH_RELEASE_REPO: &str = "effnine/grok-build-dev";
 
-/// Primary CLI base URL: Cloudflare-fronted x.ai endpoint with edge caching
-/// for binaries and origin-respecting no-cache for channel pointers.
+/// Primary CLI base URL for the legacy `internal` installer (x.ai CDN).
+/// Free/BYOK fork defaults to [`GH_RELEASE_REPO`] instead.
 pub(crate) const CLI_BASE_URL_PRIMARY: &str = "https://x.ai/cli";
 
 /// Fallback CLI base URL: direct GCS, used when the primary is unreachable
