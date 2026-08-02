@@ -68,7 +68,8 @@
             &mut app
         ));
         assert!(app.is_api_key_auth);
-        assert!(!app.usage_visible);
+        // BYOK: `/usage` stays visible for API-key auth.
+        assert!(app.usage_visible);
         assert!(app.tier_restricted_commands.is_empty());
         assert!(app.voice_mode_enabled);
 
@@ -79,7 +80,8 @@
         ));
         assert!(!app.is_api_key_auth);
         assert!(app.usage_visible);
-        assert!(!app.tier_restricted_commands.is_empty());
+        // Free/BYOK fork: no subscription slash deny list.
+        assert!(app.tier_restricted_commands.is_empty());
         assert!(!app.voice_mode_enabled);
 
         // Paid tier after API Key must not force voice off (omit voice field).
