@@ -1,5 +1,18 @@
 # Changelog
 
+# 0.2.108 — 2026-08-02
+
+## Features
+
+- **`/usage`** shows a local token/context summary for BYOK / API-key auth (no xAI billing fetch).
+- **Auto-update** defaults to GitHub Releases on `effnine/grok-build-dev` (`installer = "gh-release"`).
+- **Model picker** hides failed / non-chat models and Agnes-style image/video ids.
+
+## Bug Fixes
+
+- **Restricted slash commands** surface `/{cmd} is not available.` instead of empty SuperGrok upsell URLs.
+- **Subscription paywall / promo CTA** paths stay no-ops in the Free/BYOK fork (tests aligned).
+
 # 0.2.106 — 2026-07-18
 
 ## Features

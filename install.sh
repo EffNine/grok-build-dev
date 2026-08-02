@@ -4,7 +4,7 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/effnine/grok-build-dev/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/effnine/grok-build-dev/main/install.sh | bash -s 0.2.106
+#   curl -fsSL https://raw.githubusercontent.com/effnine/grok-build-dev/main/install.sh | bash -s 0.2.108
 #
 # Env:
 #   GROK_REPO      GitHub owner/repo (default: effnine/grok-build-dev)
@@ -12,7 +12,7 @@
 #   GROK_CHANNEL   stable|alpha (default: stable); alpha includes pre-releases
 #
 # Artifact naming matches the in-app updater: grok-{version}-{os}-{arch}
-# e.g. grok-0.2.106-macos-aarch64
+# e.g. grok-0.2.108-macos-aarch64
 
 set -e
 
