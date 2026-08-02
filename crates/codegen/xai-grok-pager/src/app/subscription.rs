@@ -397,11 +397,13 @@ mod tests {
 
     #[test]
     fn impose_gate_direct_for_non_consumer_and_already_gated() {
-        // Team session: no live verification possible — show directly.
+        // Team session: no live verification possible — store gate directly.
         let mut app = test_app();
         app.team_name = Some("Acme Corp".into());
         assert!(app.impose_gate(watch_gate()).is_empty());
-        assert!(!app.has_access());
+        assert!(app.gate.is_some(), "team impose stores gate metadata");
+        // Free/BYOK fork: stored gate never blocks access.
+        assert!(app.has_access());
         assert!(app.pending_gate_verification.is_none());
 
         // Already gated: update the copy only.
@@ -472,12 +474,15 @@ mod tests {
 
         app.promote_deferred_gate(stale_gen, "verify_timeout");
         assert!(
-            app.has_access(),
+            app.gate.is_none(),
             "stale generation must not promote the newer deferral"
         );
+        assert!(app.pending_gate_verification.is_some());
 
         app.promote_deferred_gate(app.gate_verify_gen, "verify_timeout");
-        assert!(!app.has_access(), "current generation promotes");
+        assert!(app.gate.is_some(), "current generation promotes gate metadata");
+        // Free/BYOK fork: promoted gate metadata never blocks access.
+        assert!(app.has_access());
     }
 
     #[test]

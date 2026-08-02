@@ -391,12 +391,14 @@ pub(super) fn dispatch_send_prompt_inner(
 
     let mut effects = Vec::new();
 
-    // ── Tier-restricted command upsell ─────────────────────────────
+    // ── Tier-restricted command gate ───────────────────────────────
     // Restricted commands (`/usage`, `/imagine`, …) are hidden from the
     // registry's `get()`, so a typed invocation would otherwise fall
     // through the unknown-command path below and leak to the model as a
-    // raw prompt. Upsell instead; genuinely unknown commands still pass
-    // through (shell/ACP commands depend on that).
+    // raw prompt. Upstream opens a SuperGrok upsell; the Free/BYOK fork
+    // has no upsell — surface a local system message instead. Genuinely
+    // unknown commands still pass through (shell/ACP commands depend on
+    // that).
     if !literal
         && trimmed.starts_with('/')
         && let Some(invocation) = crate::slash::parse_invocation(trimmed)
@@ -406,19 +408,25 @@ pub(super) fn dispatch_send_prompt_inner(
             .registry()
             .is_restricted(invocation.token)
     {
-        // Only consume the composer when the upsell can actually open: with
-        // another question modal already up, `open_supergrok_upsell` would
-        // no-op and wiping the composer here would silently drop the typed
-        // text. Keep it instead so the user can resubmit after closing the
-        // modal — and never fall through to passthrough for restricted
-        // commands.
+        // Only consume the composer when nothing else owns the keyboard:
+        // with another question modal already up, wiping the composer
+        // would silently drop the typed text. Keep it instead so the user
+        // can resubmit after closing the modal — and never fall through
+        // to passthrough for restricted commands.
         if agent.question_view.is_none() {
             if consume_input {
                 agent.prompt.set_text("");
             }
             let opened =
                 super::billing::open_restricted_command_upsell(agent, login_method_id_from_app);
-            debug_assert!(opened, "no modal was open, so the upsell must open");
+            if !opened {
+                // BYOK / no-upsell path: tell the user the command is gated
+                // without opening a subscription modal or leaking to the model.
+                agent.scrollback.push_block(RenderBlock::system(format!(
+                    "/{} is not available.",
+                    invocation.token
+                )));
+            }
         }
         return vec![];
     }

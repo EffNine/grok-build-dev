@@ -485,14 +485,26 @@ fn plant_local_build_session(cwd: &std::path::Path, session_id: &str) -> std::pa
     std::fs::write(sess_dir.join("summary.json"), b"{}").expect("plant summary");
     sess_dir
 }
-/// Extract the in-flight auth request sequence, panicking if the auth
-/// state is not `Authenticating`.
-fn authenticating_seq(app: &AppView) -> u64 {
-    match app.auth_state {
-        AuthState::Authenticating { request_seq, .. } => request_seq,
-        ref other => panic!("expected Authenticating, got {other:?}"),
+/// Seed a mid-session re-auth detour: stash the current view, switch to
+/// Welcome, and enter `Authenticating` (OAuth is disabled; BYOK tests use
+/// this to exercise `AuthComplete` / `CancelLogin` without calling Login).
+fn seed_mid_session_authenticating(app: &mut AppView) -> u64 {
+    if !matches!(app.active_view, ActiveView::Welcome) {
+        app.auth_return_view = Some(app.active_view);
+        app.active_view = ActiveView::Welcome;
     }
+    let request_seq = app.next_auth_request_seq;
+    app.next_auth_request_seq += 1;
+    app.auth_state = AuthState::Authenticating {
+        request_seq,
+        handle: None,
+        auth_url: None,
+        mode: AuthMode::Pending,
+    };
+    request_seq
 }
+
+const BYOK_LOGIN_ERROR: &str = "OAuth login is disabled";
 /// Extract text from the last system message in an agent's scrollback.
 fn last_system_text(app: &AppView, id: AgentId) -> String {
     system_text_from_end(app, id, 0)

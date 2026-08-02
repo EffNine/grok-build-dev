@@ -1325,12 +1325,17 @@ fn login_mid_session_switches_to_welcome_and_stashes_view() {
     let effects = dispatch(Action::Login, &mut app);
     assert_eq!(app.active_view, ActiveView::Welcome);
     assert_eq!(app.auth_return_view, Some(ActiveView::Agent(AgentId(0))));
-    assert!(matches!(app.auth_state, AuthState::Authenticating { .. }));
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::Authenticate { .. })),
-        "must still kick off the auth flow",
+        matches!(
+            &app.auth_state,
+            AuthState::Pending { error: Some(msg) } if msg.contains(BYOK_LOGIN_ERROR)
+        ),
+        "BYOK fork must surface setup instructions, got {:?}",
+        app.auth_state
+    );
+    assert!(
+        effects.is_empty(),
+        "BYOK login must not start OAuth, got {effects:?}"
     );
 }
 /// A mid-session `/login` switches to the welcome view to host the auth
@@ -1360,8 +1365,7 @@ fn auth_complete_strips_reauth_prompt_after_mid_session_login() {
         .unwrap()
         .scrollback
         .push_block(RenderBlock::session_event(SessionEvent::ReAuthRequired));
-    dispatch(Action::Login, &mut app);
-    let seq = authenticating_seq(&app);
+    let seq = seed_mid_session_authenticating(&mut app);
     dispatch(
         Action::TaskComplete(TaskResult::AuthComplete {
             request_seq: seq,
@@ -1401,8 +1405,7 @@ fn auth_complete_retries_stashed_prompt_after_mid_session_login() {
             chip_elements: Vec::new(),
         });
     }
-    dispatch(Action::Login, &mut app);
-    let seq = authenticating_seq(&app);
+    let seq = seed_mid_session_authenticating(&mut app);
     let effects = dispatch(
         Action::TaskComplete(TaskResult::AuthComplete {
             request_seq: seq,

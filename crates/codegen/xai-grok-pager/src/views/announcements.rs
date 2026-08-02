@@ -1262,14 +1262,16 @@ mod tests {
         );
     }
 
-    /// `promo_cta_target` requires BOTH trimmed-non-empty label and url — a
-    /// partial CTA never produces an openable target (or a painted button).
+    /// Free/BYOK fork: `promo_cta` / `promo_cta_target` always return `None`
+    /// (no upgrade CTAs). `usable_cta` still validates the pair shape for
+    /// render helpers that consult it directly.
     #[test]
-    fn promo_cta_target_requires_usable_pair() {
+    fn promo_cta_target_always_none_in_byok_fork() {
         let full = vec![promo("p", "msg", Some(("Go", " https://x.ai/promo ")))];
-        let (a, url) = promo_cta_target(&full, &no_hidden()).expect("usable target");
-        assert_eq!(a.id.as_deref(), Some("p"));
-        assert_eq!(url, "https://x.ai/promo");
+        assert!(
+            promo_cta_target(&full, &no_hidden()).is_none(),
+            "BYOK fork must not expose promo CTA targets"
+        );
 
         let mut label_only = promo("p", "msg", None);
         label_only.cta = Some(xai_grok_announcements::AnnouncementCta {
@@ -1285,7 +1287,6 @@ mod tests {
         blank_url.cta = None;
         assert!(promo_cta_target(&[blank_url], &no_hidden()).is_none());
 
-        // Hidden promo: no click target exists, so nothing to open.
         let hidden: BTreeSet<String> = ["p".to_string()].into_iter().collect();
         assert!(promo_cta_target(&full, &hidden).is_none());
     }
@@ -1334,29 +1335,16 @@ mod tests {
         );
     }
 
-    /// `promo_cta` projects the owner + validated `(label, url)` all surfaces
-    /// paint from; `is_dismissible(owner)` distinguishes the pinned (Ctrl+O)
-    /// promo from a dismissible one.
+    /// Free/BYOK fork: `promo_cta` never returns a CTA — pinned and
+    /// dismissible promos alike.
     #[test]
-    fn promo_cta_returns_label_and_pinned_flag() {
+    fn promo_cta_always_none_in_byok_fork() {
         let mut pinned = promo("p", "msg", Some(("Upgrade Account", "https://x.ai/promo")));
         pinned.dismissible = Some(false);
-        let pinned = [pinned];
-        let (owner, label, url) = promo_cta(&pinned, &no_hidden()).expect("usable cta");
-        assert_eq!(label, "Upgrade Account");
-        assert_eq!(url, "https://x.ai/promo");
-        assert!(
-            !is_dismissible(owner),
-            "pinned promo drives the Ctrl+O override"
-        );
+        assert!(promo_cta(&[pinned], &no_hidden()).is_none());
 
         let dismissible = [promo("d", "msg", Some(("Go", "https://x.ai")))];
-        let (owner, label, _) = promo_cta(&dismissible, &no_hidden()).expect("usable cta");
-        assert_eq!(label, "Go");
-        assert!(
-            is_dismissible(owner),
-            "absent flag = dismissible = no override"
-        );
+        assert!(promo_cta(&dismissible, &no_hidden()).is_none());
 
         assert!(promo_cta(&[promo("n", "msg", None)], &no_hidden()).is_none());
     }
@@ -1422,12 +1410,10 @@ mod tests {
         assert_eq!(upgrade_cta_reserve("Go", Some("hello")), 4 + 1 + 5);
     }
 
-    /// Slot consistency: `promo_cta_target` resolves through the banner-slot
-    /// gate, so a live critical owning the slot yields no target (a click
-    /// through a stale prior-frame rect must not open the promo URL) — and
-    /// the promo resolves again once the critical is hidden or expired.
+    /// Free/BYOK fork: `promo_cta_target` stays `None` even when a critical
+    /// yields the slot back to a promo (upgrade CTAs are hard-disabled).
     #[test]
-    fn promo_cta_target_yields_to_critical_slot_owner() {
+    fn promo_cta_target_stays_none_when_critical_yields_in_byok_fork() {
         let promo_ann = promo("p", "upsell", Some(("Go", "https://x.ai/promo")));
         let crit = RemoteAnnouncement {
             id: Some("c".into()),
@@ -1437,26 +1423,18 @@ mod tests {
         };
 
         let both = vec![promo_ann.clone(), crit.clone()];
-        assert!(
-            promo_cta_target(&both, &no_hidden()).is_none(),
-            "a critical slot owner must yield no CTA target"
-        );
+        assert!(promo_cta_target(&both, &no_hidden()).is_none());
 
-        // Hiding the (dismissible) critical hands the slot back to the promo.
         let hide_crit: BTreeSet<String> = ["c".to_string()].into_iter().collect();
-        assert_eq!(
-            promo_cta_target(&both, &hide_crit).map(|(a, url)| (a.id.as_deref(), url)),
-            Some((Some("p"), "https://x.ai/promo"))
+        assert!(
+            promo_cta_target(&both, &hide_crit).is_none(),
+            "BYOK fork must not expose promo CTA after critical yields"
         );
 
-        // So does the critical expiring (same draw/dispatch-time expiry gate).
         let mut expired_crit = crit;
         expired_crit.expires_at = Some("2000-01-01T00:00:00Z".into());
         let with_expired = vec![promo_ann, expired_crit];
-        assert_eq!(
-            promo_cta_target(&with_expired, &no_hidden()).and_then(|(a, _)| a.id.as_deref()),
-            Some("p")
-        );
+        assert!(promo_cta_target(&with_expired, &no_hidden()).is_none());
     }
 
     /// The one CTA gate fails closed on schemes outside the Standard open
