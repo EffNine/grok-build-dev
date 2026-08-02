@@ -300,8 +300,12 @@ pub async fn get_installer() -> Option<&'static str> {
     let cfg = config::load_config().await;
     match cfg.cli.installer.as_deref() {
         Some("npm") => Some("npm"),
-        Some("gh-release") => Some("gh-release"),
-        _ => Some("internal"),
+        Some("internal") => Some("internal"),
+        // Free/BYOK fork: default (and install.sh) use GitHub Releases on
+        // `GH_RELEASE_REPO`, not the x.ai CDN `internal` path.
+        Some("gh-release") | Some("gh") | None => Some("gh-release"),
+        // Unknown values still prefer this fork's release channel.
+        _ => Some("gh-release"),
     }
 }
 
@@ -335,13 +339,13 @@ fn needs_update(current: &str, target: &str, channel: &str, allow_downgrade: boo
     })
 }
 
-/// Returns `true` for installer backends whose version source is authoritative
-/// (managed by xAI directly), meaning a pointer rollback is intentional and
-/// should trigger a client downgrade. Returns `false` for backends like npm
-/// where stale corporate registries/proxies can return arbitrarily old versions.
+/// Returns `true` for installer backends whose version source is authoritative,
+/// meaning a pointer/tag rollback is intentional and should trigger a client
+/// downgrade. Returns `false` for backends like npm where stale corporate
+/// registries/proxies can return arbitrarily old versions.
 ///
-/// Users who installed via `install.sh` are classified as `"internal"` by
-/// `get_installer()`, so they also get rollback support.
+/// Free/BYOK fork: `install.sh` and the default path are `"gh-release"`
+/// (`GH_RELEASE_REPO`); `"internal"` remains available for the x.ai CDN.
 fn installer_allows_downgrade(installer: &str) -> bool {
     match installer {
         "internal" | "gh-release" => true,
@@ -3481,6 +3485,24 @@ mod tests {
         assert!(
             hint.contains("effnine/grok-build-dev"),
             "should point at this fork: {hint}"
+        );
+    }
+
+    #[test]
+    fn test_byok_fork_auto_update_targets_github_releases() {
+        assert_eq!(
+            crate::version::GH_RELEASE_REPO,
+            "effnine/grok-build-dev",
+            "auto-update must target this fork's GitHub Releases"
+        );
+        let hint = reinstall_hint("gh-release");
+        assert!(
+            hint.contains(crate::version::GH_RELEASE_REPO),
+            "reinstall hint must name GH_RELEASE_REPO: {hint}"
+        );
+        assert!(
+            manual_install_cmd().contains(crate::version::GH_RELEASE_REPO),
+            "bootstrap one-liner must point at this fork"
         );
     }
 
