@@ -985,8 +985,19 @@ fn wire_status_implies_hidden(status: Option<&str>) -> bool {
 /// xAI's OpenAI-compatible `/v1/models` mixes chat models with image/video
 /// generation IDs (`image_price` only). Selecting those in `/model` fails at
 /// inference time. Prefer `/language-models` for xAI hosts; this filter is the
-/// safety net when a full `/models` catalog is still fetched (OpenAI, proxies).
+/// safety net when a full `/models` catalog is still fetched (OpenAI, proxies,
+/// Agnes-style hosts that only signal media via the model id).
 fn wire_implies_non_chat_hidden(obj: &serde_json::Map<String, serde_json::Value>) -> bool {
+    let id = get_string(obj, "id")
+        .or_else(|| get_string(obj, "model"))
+        .or_else(|| get_string(obj, "modelId"));
+    if id
+        .as_deref()
+        .is_some_and(wire_id_implies_non_chat_hidden)
+    {
+        return true;
+    }
+
     if let Some(mods) = obj
         .get("output_modalities")
         .or_else(|| obj.get("outputModalities"))
@@ -1030,6 +1041,23 @@ fn wire_implies_non_chat_hidden(obj: &serde_json::Map<String, serde_json::Value>
     }
 
     false
+}
+
+/// Hide obvious media-generation IDs when the host omits modalities/pricing.
+///
+/// Matches whole id segments (`agnes-image-2.0-flash`, `agnes-video-v2.0`) and
+/// xAI `imagine-image` / `imagine-video` names. Does **not** hide multimodal
+/// chat models whose ids merely mention vision (e.g. `gpt-4o`).
+fn wire_id_implies_non_chat_hidden(id: &str) -> bool {
+    let id = id.trim().to_ascii_lowercase();
+    if id.is_empty() {
+        return false;
+    }
+    if id.contains("imagine-image") || id.contains("imagine-video") {
+        return true;
+    }
+    id.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|seg| matches!(seg, "image" | "video"))
 }
 
 fn get_string(obj: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<String> {
@@ -1925,6 +1953,45 @@ mod tests {
                 .unwrap()
                 .hidden
         );
+    }
+
+    #[test]
+    fn agnes_style_image_video_ids_are_hidden_without_modalities() {
+        // Agnes (and similar OpenAI-compatible hubs) tag media models only in
+        // the id — no output_modalities / image_price fields.
+        for id in [
+            "agnes-image-2.0-flash",
+            "agnes-image-2.1-flash",
+            "agnes-video-v2.0",
+        ] {
+            let row = serde_json::json!({
+                "id": id,
+                "object": "model",
+                "owned_by": "custom",
+                "supported_endpoint_types": ["openai"]
+            });
+            assert!(
+                parse_remote_model_value(&row, "https://apihub.agnes-ai.com/v1")
+                    .unwrap()
+                    .hidden,
+                "{id} must be hidden from /model"
+            );
+        }
+
+        for id in ["agnes-2.0-flash", "agnes-2.5-pro", "gpt-4o"] {
+            let row = serde_json::json!({
+                "id": id,
+                "object": "model",
+                "owned_by": "custom",
+                "supported_endpoint_types": ["openai"]
+            });
+            assert!(
+                !parse_remote_model_value(&row, "https://apihub.agnes-ai.com/v1")
+                    .unwrap()
+                    .hidden,
+                "{id} must stay visible"
+            );
+        }
     }
 
     #[test]
