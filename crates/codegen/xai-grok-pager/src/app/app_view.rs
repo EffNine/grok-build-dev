@@ -1200,7 +1200,9 @@ impl AppView {
                 .subscription_tier
                 .as_deref()
                 .is_some_and(is_api_key_label);
-        self.usage_visible = meta.team_name.is_none() && !self.is_api_key_auth;
+        // Free/BYOK fork: `/usage` is a local summary (not xAI billing), so keep
+        // it available for API-key users. Still hide for team accounts.
+        self.usage_visible = meta.team_name.is_none();
         self.apply_tier_restrictions();
         if self.is_api_key_auth {
             self.ensure_voice_for_api_key();
@@ -6556,7 +6558,8 @@ pub(crate) mod tests {
             ..Default::default()
         });
         assert!(app.is_api_key_auth);
-        assert!(!app.usage_visible);
+        // BYOK: `/usage` stays visible (local summary, not remote billing).
+        assert!(app.usage_visible);
         assert!(app.tier_restricted_commands.is_empty());
         assert_tier_restricted_commands_present(&app);
         assert!(!app.is_voice_tier_restricted());
@@ -6577,17 +6580,12 @@ pub(crate) mod tests {
         assert!(!app.is_api_key_auth);
         assert!(!app.voice_mode_enabled);
         assert!(app.usage_visible);
-        assert!(!app.tier_restricted_commands.is_empty());
-    }
-    fn expected_tier_restricted_commands() -> Vec<String> {
-        TIER_RESTRICTED_COMMANDS
-            .iter()
-            .map(|n| (*n).to_string())
-            .collect()
+        // Free/BYOK fork: subscription tier never populates a slash deny list.
+        assert!(app.tier_restricted_commands.is_empty());
     }
     /// Make every tier-restricted command visible on the welcome prompt so the
-    /// present/absent assertions exercise the deny list, not incidental
-    /// fail-closed hiding:
+    /// present assertions exercise availability, not incidental fail-closed
+    /// hiding:
     /// - `/imagine`, `/imagine-video` are `required_tools()`-gated, so advertise
     ///   their tools (otherwise the registry fail-closes them).
     /// - `/voice` is fail-closed hidden until the remote flag turns it on, so
@@ -6606,16 +6604,6 @@ pub(crate) mod tests {
             );
         app.welcome_prompt.set_voice_visible(true);
     }
-    fn assert_tier_restricted_commands_absent(app: &AppView) {
-        let reg = app.welcome_prompt.slash_controller.registry();
-        for name in TIER_RESTRICTED_COMMANDS {
-            assert!(
-                reg.get(name).is_none(),
-                "/{name} must be denied on a restricted tier"
-            );
-        }
-        assert!(reg.get("cost").is_none(), "/cost alias must be denied");
-    }
     fn assert_tier_restricted_commands_present(app: &AppView) {
         let reg = app.welcome_prompt.slash_controller.registry();
         for name in TIER_RESTRICTED_COMMANDS {
@@ -6626,19 +6614,17 @@ pub(crate) mod tests {
         }
     }
     #[test]
-    fn apply_auth_meta_restricts_usage_for_free_tier() {
+    fn apply_auth_meta_never_restricts_slash_commands_on_free_tier() {
         let mut app = test_app();
         advertise_media_tools(&mut app);
         app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta::default());
-        assert_eq!(
-            app.tier_restricted_commands,
-            expected_tier_restricted_commands()
-        );
-        assert_tier_restricted_commands_absent(&app);
+        // Free/BYOK fork: no subscription deny list — `/usage` stays available.
+        assert!(app.tier_restricted_commands.is_empty());
+        assert_tier_restricted_commands_present(&app);
         assert!(app.usage_visible);
     }
     #[test]
-    fn apply_auth_meta_restricts_usage_for_x_basic_tier() {
+    fn apply_auth_meta_never_restricts_slash_commands_on_x_basic_tier() {
         let mut app = test_app();
         advertise_media_tools(&mut app);
         let meta = xai_grok_shell::auth::AuthMeta {
@@ -6646,14 +6632,12 @@ pub(crate) mod tests {
             ..Default::default()
         };
         app.apply_auth_meta(&meta);
-        assert_eq!(
-            app.tier_restricted_commands,
-            expected_tier_restricted_commands()
-        );
-        assert_tier_restricted_commands_absent(&app);
+        assert!(app.tier_restricted_commands.is_empty());
+        assert_tier_restricted_commands_present(&app);
+        assert!(app.usage_visible);
     }
     #[test]
-    fn apply_auth_meta_lifts_restrictions_for_paid_tiers_and_teams() {
+    fn apply_auth_meta_keeps_slash_commands_unrestricted_across_tiers() {
         let mut app = test_app();
         advertise_media_tools(&mut app);
         let meta = xai_grok_shell::auth::AuthMeta {
@@ -6666,7 +6650,7 @@ pub(crate) mod tests {
         let mut app = test_app();
         advertise_media_tools(&mut app);
         app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta::default());
-        assert!(!app.tier_restricted_commands.is_empty());
+        assert!(app.tier_restricted_commands.is_empty());
         app.subscription_tier = Some("SuperGrok".into());
         app.apply_tier_restrictions();
         assert!(app.tier_restricted_commands.is_empty());
@@ -6698,10 +6682,10 @@ pub(crate) mod tests {
         assert!(TIER_RESTRICTED_COMMANDS.contains(&"voice"));
     }
     #[test]
-    fn is_voice_tier_restricted_tracks_tier() {
+    fn is_voice_tier_restricted_always_false_in_byok_fork() {
         let mut app = test_app();
         app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta::default());
-        assert!(app.is_voice_tier_restricted());
+        assert!(!app.is_voice_tier_restricted());
         let mut app = test_app();
         let meta = xai_grok_shell::auth::AuthMeta {
             subscription_tier: Some("SuperGrok".into()),
@@ -6718,7 +6702,9 @@ pub(crate) mod tests {
             url: Some("https://grok.com/supergrok?referrer=grok-build".into()),
             label: None,
         });
-        assert!(app.is_access_blocked());
+        // Free/BYOK fork: paywall gate never blocks access.
+        assert!(!app.is_access_blocked());
+        assert!(app.has_access());
         let meta = xai_grok_shell::auth::AuthMeta::default();
         app.apply_auth_meta(&meta);
         assert!(app.gate.is_none());
@@ -6739,7 +6725,9 @@ pub(crate) mod tests {
         };
         app.apply_auth_meta(&meta);
         assert!(app.gate.is_some());
-        assert!(app.is_access_blocked());
+        // Free/BYOK fork: stored gate metadata does not block access.
+        assert!(!app.is_access_blocked());
+        assert!(app.has_access());
     }
     #[test]
     fn welcome_ctrl_q_requires_confirmation() {

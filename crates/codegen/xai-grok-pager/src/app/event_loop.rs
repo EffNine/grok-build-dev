@@ -907,9 +907,10 @@ pub(crate) async fn run(
         app.is_api_key_auth = app.auth_methods.iter().any(|m| {
             m.id().0.as_ref() == xai_grok_shell::agent::auth_method::XAI_API_KEY_METHOD_ID
         });
-        // No AuthMeta on this path — hide `/usage` for API keys.
+        // No AuthMeta on this path — `/usage` stays available for API-key
+        // (BYOK) users; it shows a local summary rather than xAI billing.
         if app.is_api_key_auth {
-            app.usage_visible = false;
+            app.usage_visible = true;
         }
     }
 
@@ -1449,7 +1450,8 @@ pub(crate) async fn run(
             return Ok(make_run_result(&app));
         }
         // Fetch billing early so the welcome screen can show a credit warning.
-        if app.usage_visible {
+        // Skip for API-key (BYOK) — there is no xAI billing endpoint to query.
+        if app.usage_visible && !app.is_api_key_auth {
             let effs = vec![super::actions::Effect::FetchAppBilling];
             if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
                 return Ok(make_run_result(&app));

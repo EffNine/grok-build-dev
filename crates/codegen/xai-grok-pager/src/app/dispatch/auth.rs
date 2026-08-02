@@ -335,7 +335,7 @@ pub(super) fn handle_auth_complete(
                 note_peek_page_flip(app, id, page_flip_entry);
             }
             let mut effects = dispatch(Action::RequestBundleStatus, app);
-            if app.usage_visible {
+            if app.usage_visible && !app.is_api_key_auth {
                 effects.push(Effect::FetchAppBilling);
             }
             effects.extend(retry_effects);
@@ -353,7 +353,8 @@ pub(super) fn handle_auth_complete(
             effects.push(Effect::SchedulePaywallCheck);
         }
         // Fetch billing so the welcome screen can show a credit warning.
-        if app.usage_visible {
+        // Skip for API-key (BYOK) — no xAI billing to query.
+        if app.usage_visible && !app.is_api_key_auth {
             effects.push(Effect::FetchAppBilling);
         }
         // Fetch changelog (mirrors startup path for interactive login).
