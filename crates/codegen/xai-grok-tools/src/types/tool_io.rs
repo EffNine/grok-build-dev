@@ -31,6 +31,8 @@ use crate::implementations::grok_build::web_fetch::WebFetchInput;
 use crate::implementations::grok_build::web_search::WebSearchInput;
 use crate::implementations::lsp::LspToolInput;
 use crate::implementations::memory::types::{MemoryGetInput, MemorySearchInput};
+use crate::implementations::memory::write_tool::MemoryInput as MemoryWriteInput;
+use crate::implementations::skills::manage_tool::SkillManageInput;
 use crate::implementations::opencode::write::WriteInput;
 use crate::implementations::search_tool::SearchToolInput;
 use crate::implementations::skills::skill::SkillInput;
@@ -84,6 +86,8 @@ pub enum ToolInput {
     CodexReadFile(CodexReadFileInput),
     MemorySearch(MemorySearchInput),
     MemoryGet(MemoryGetInput),
+    MemoryWrite(MemoryWriteInput),
+    SkillManage(SkillManageInput),
     SearchTool(SearchToolInput),
     UseTool(UseToolInput),
     EnterPlanMode(EnterPlanModeInput),

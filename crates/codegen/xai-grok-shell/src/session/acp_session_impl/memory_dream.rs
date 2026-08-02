@@ -45,7 +45,7 @@ impl SessionActor {
         bridge: &xai_grok_tools::bridge::ToolBridge,
     ) -> Result<(), String> {
         use xai_grok_tools::implementations::memory::{
-            MEMORY_GET_TOOL_NAME, MEMORY_SEARCH_TOOL_NAME,
+            MEMORY_GET_TOOL_NAME, MEMORY_SEARCH_TOOL_NAME, MEMORY_TOOL_NAME,
         };
 
         bridge
@@ -64,6 +64,14 @@ impl SessionActor {
             )
             .await
             .map_err(|e| format!("failed to register memory_get: {e}"))?;
+        bridge
+            .register_mcp_tools(
+                MEMORY_TOOL_NAME.to_owned(),
+                xai_grok_tools::implementations::memory::write_tool::MemoryWriteImpl,
+                None,
+            )
+            .await
+            .map_err(|e| format!("failed to register memory: {e}"))?;
         Ok(())
     }
 
