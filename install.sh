@@ -11,6 +11,15 @@
 #   GROK_BIN_DIR   Install bin dir (default: ~/.grok/bin)
 #   GROK_CHANNEL   stable|alpha (default: stable); alpha includes pre-releases
 #
+# Integrity:
+#   The downloaded binary is verified against the release's SHA256SUMS asset
+#   BEFORE it is made executable or run. A missing/mismatched digest aborts
+#   the install (fail closed). Releases published before SHA256SUMS existed
+#   can only be installed with explicit GROK_INSECURE_SKIP_CHECKSUM=1.
+#   Future: when a detached signature (e.g. minisign/GPG) is published per
+#   release, verify_signature() below is the hook point — extend it to fetch
+#   the public key from a pinned location and require a valid signature.
+#
 # Artifact naming matches the in-app updater: grok-{version}-{os}-{arch}
 # e.g. grok-0.2.108-macos-aarch64
 
@@ -196,6 +205,64 @@ fi
 binary_tmp="${binary_path}.tmp.$$"
 rm -f "$binary_tmp" 2>/dev/null || true
 
+# Compute the SHA-256 digest of a file, portably.
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{print $1}'
+    else
+        openssl dgst -sha256 -r "$1" | awk '{print $1}'
+    fi
+}
+
+# Verify the downloaded binary against the release's SHA256SUMS asset.
+# Fail closed: no published digest, unreadable manifest, or mismatch aborts
+# the install before the binary is made executable or run. Legacy releases
+# without a manifest require explicit GROK_INSECURE_SKIP_CHECKSUM=1.
+verify_signature() {
+    local file="$1"
+    local sums_url="${RELEASE_BASE}/v${version}/SHA256SUMS"
+    local sums expected actual
+    sums=$(download_file "$sums_url" 2>/dev/null) || true
+
+    if [ -z "$sums" ]; then
+        if [ "${GROK_INSECURE_SKIP_CHECKSUM:-0}" = "1" ]; then
+            echo "WARNING: GROK_INSECURE_SKIP_CHECKSUM=1 — installing UNVERIFIED binary for v${version}." >&2
+            echo "         This release has no SHA256SUMS asset; integrity was NOT checked." >&2
+            return 0
+        fi
+        echo "Error: refusing to install an unverified binary." >&2
+        echo "  No SHA256SUMS asset found at ${sums_url}" >&2
+        echo "  This release predates checksum publication. Options:" >&2
+        echo "    1. Install a newer release that ships SHA256SUMS (recommended)" >&2
+        echo "    2. Accept the risk explicitly: GROK_INSECURE_SKIP_CHECKSUM=1 $(basename "$0") ${TARGET:+$TARGET}" >&2
+        exit 1
+    fi
+
+    expected=$(printf '%s\n' "$sums" | awk -v n="$artifact_name" '$2 == n || $2 == "*"n {print $1; exit}')
+    if [ -z "$expected" ]; then
+        echo "Error: refusing to install an unverified binary." >&2
+        echo "  ${artifact_name} is not listed in the release SHA256SUMS manifest." >&2
+        exit 1
+    fi
+
+    actual=$(sha256_of "$file")
+    if [ -z "$actual" ] || ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1 && ! command -v openssl >/dev/null 2>&1; then
+        echo "Error: no SHA-256 tool available (sha256sum/shasum/openssl); cannot verify download." >&2
+        exit 1
+    fi
+    if [ "$actual" != "$expected" ]; then
+        rm -f "$file" 2>/dev/null || true
+        echo "Error: CHECKSUM MISMATCH for ${artifact_name} — install aborted, download deleted." >&2
+        echo "  expected: ${expected}" >&2
+        echo "  actual:   ${actual}" >&2
+        echo "  The download may be corrupted or tampered with. Do not retry blindly." >&2
+        exit 1
+    fi
+    echo "  Checksum verified (${actual:0:16}…)." >&2
+}
+
 echo "  Downloading ${artifact_name}..." >&2
 if ! download_file_parallel "$artifact_url" "$binary_tmp"; then
     rm -f "$binary_tmp"
@@ -208,6 +275,9 @@ if ! download_file_parallel "$artifact_url" "$binary_tmp"; then
     fi
     exit 1
 fi
+
+# Integrity gate: runs BEFORE chmod/exec on every platform.
+verify_signature "$binary_tmp"
 
 if [ "$os" = "windows" ]; then
     mv -f "$binary_tmp" "$binary_path"

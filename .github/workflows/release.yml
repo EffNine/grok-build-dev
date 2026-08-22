@@ -148,6 +148,15 @@ jobs:
             exit 1
           fi
 
+      # Integrity manifest consumed by install.sh / `grok update`.
+      # The installer refuses to execute a binary whose digest is not
+      # listed here (fail closed).
+      - name: Generate SHA256SUMS
+        run: |
+          cd dist
+          sha256sum $(basename -a grok-*) > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -156,7 +165,9 @@ jobs:
           draft: false
           generate_release_notes: true
           fail_on_unmatched_files: false
-          files: dist/grok-*
+          files: |
+            dist/grok-*
+            dist/SHA256SUMS
           body: |
             BYOK fork release `${{ needs.version.outputs.version }}`.
 
